@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 
 _LOG = logging.getLogger("MiniMaxH3ActivationChunkStar7")
-NODE_VERSION = "2.16.2"
+NODE_VERSION = "2.16.3"
 FP16_EXACT_PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 HYBRID_ALL_INT8_BACKEND_NAME = "hybrid_sm75_ck_sla_all_int8"
 SM86PLUS_BACKEND_NAME = "sla_sm80+_qk_int8_pv_bf16"
@@ -1729,6 +1729,11 @@ def _step_backend_label(transformer_options: dict):
 
 
 def _step_timing_start(transformer_options: dict, x, step_index: int, total_steps: int):
+    # Composite callers such as the HD tiled second pass own their complete
+    # sampler-step timer. A model-level timer would otherwise report one line
+    # per tile and overwrite shared timing state.
+    if transformer_options.get("_star7_external_step_timing"):
+        return
     if x is None or not torch.is_tensor(x):
         return
     if x.device.type == "cuda":
@@ -1756,6 +1761,9 @@ def _step_timing_finish(
     total_steps: int,
     model,
 ) -> None:
+    if transformer_options.get("_star7_external_step_timing"):
+        transformer_options.pop("_star7_step_timing", None)
+        return
     timing = transformer_options.pop("_star7_step_timing", None)
     if not isinstance(timing, dict) or timing.get("step") != step_index:
         return
@@ -1804,11 +1812,16 @@ def _step_timing_finish(
             return
     except (ImportError, AttributeError, RuntimeError):
         pass
-    _LOG.info(
-        "%s",
-        message,
-    )
-    for handler in _LOG.handlers:
+    # The launcher subscribes to ComfyUI's stderr interceptor. Write and flush
+    # the completed line explicitly so its web console does not buffer all
+    # step timings until the prompt finishes.
+    try:
+        sys.stderr.write(f"[INFO] {message}\n")
+        sys.stderr.flush()
+        return
+    except Exception:
+        _LOG.info("%s", message)
+    for handler in (*_LOG.handlers, *logging.getLogger().handlers):
         try:
             handler.flush()
         except Exception:

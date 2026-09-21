@@ -1,3 +1,8 @@
+import sys
+import types
+from types import SimpleNamespace
+from unittest import mock
+
 import torch
 
 import comfy.nested_tensor
@@ -19,9 +24,68 @@ from .h3_latent_upscale_star7 import (
     _tile_windows,
     _tile_payload,
     _SpatialTileModel,
+    _sample_hd_refinement,
     _target_geometry,
     _temporal_weight,
 )
+
+
+def test_hd_refinement_reports_each_complete_step_once():
+    messages = []
+
+    class FakeGuider:
+        model_patcher = object()
+
+        @staticmethod
+        def sample(noise, latent_image, sampler, sigmas, **kwargs):
+            callback = kwargs["callback"]
+            for step in range(3):
+                callback(step, latent_image, latent_image, 3)
+            return latent_image
+
+    fake_preview = types.ModuleType("latent_preview")
+    fake_preview.prepare_callback = lambda *args, **kwargs: lambda *cb_args: None
+    latent = {"samples": torch.zeros((1, 1, 1, 1))}
+    noise = SimpleNamespace(
+        seed=7,
+        generate_noise=lambda value: torch.zeros_like(value["samples"]),
+    )
+    with (
+        mock.patch.dict(sys.modules, {"latent_preview": fake_preview}),
+        mock.patch("comfy.sample.fix_empty_latent_channels", side_effect=lambda _, value, *args: value),
+        mock.patch.object(hd_module.model_management, "intermediate_device", return_value=torch.device("cpu")),
+        mock.patch.object(hd_module, "_emit_live_info", side_effect=messages.append),
+    ):
+        output = _sample_hd_refinement(
+            noise, FakeGuider(), object(), torch.tensor([1.0, 0.6, 0.3, 0.0]), latent
+        )
+
+    assert output["samples"] is latent["samples"]
+    assert len(messages) == 4
+    assert messages[0] == "Star7 H3 HD | refine started | steps=3"
+    assert "refine step 1/3" in messages[1]
+    assert "refine step 2/3" in messages[2]
+    assert "refine step 3/3" in messages[3]
+
+
+def test_live_hd_log_flushes_the_launcher_stream_immediately():
+    class LiveStream:
+        def __init__(self):
+            self.content = ""
+            self.flush_count = 0
+
+        def write(self, value):
+            self.content += value
+
+        def flush(self):
+            self.flush_count += 1
+
+    stream = LiveStream()
+    with mock.patch.object(hd_module.sys, "stderr", stream):
+        hd_module._emit_live_info("Star7 H3 HD | refine step 1/2 | 1.25s/it")
+
+    assert stream.content == "[INFO] Star7 H3 HD | refine step 1/2 | 1.25s/it\n"
+    assert stream.flush_count == 1
 
 
 def test_target_geometry_reaches_requested_area_and_never_shrinks():

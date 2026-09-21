@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.16.3 - 2026-09-21
+
+- Fix delayed or incomplete step timing in launcher consoles, including tiled HD second passes.
+
 ## 2.16.2 - 2026-09-18
 
 - Fade face masks at crop boundaries to prevent hard seams on extreme close-ups; preserve masks whose feathered support stays clear of those edges.

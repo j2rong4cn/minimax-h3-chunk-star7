@@ -83,21 +83,18 @@ Sparse attention is not guaranteed to outperform CK at every resolution, duratio
 
 Chinese ComfyUI environments display Chinese node and control labels; other locales display English. Attention backend IDs remain unchanged.
 
+Connected media inputs show their prompt tags: `<Picture N>`, `<Video N>`, and `<Audio N>`; driving audio uses `<Audio D>`.
+
 ### H3 One-click Face Repair
 
-Replace the original conditioning node with All-in-one Conditioning, then connect Sampled result and Sampling context to One-click Face Repair. It reuses the existing model chain, so no second loader, LoRA, or chunk chain is required. Disabling repair or detecting no face passes the input latent through unchanged without an extra VAE encode.
+Connect Sampled result and Sampling context. The model, LoRA, and attention inherit the first pass by default. Disabling repair or detecting no face passes the latent through unchanged.
 
-The top rows are Enable repair, Face detector model, Face-repair LoRA, Face-repair LoRA strength, and Face-repair attention. The detector selector uses an installed model from `models/ultralytics/bbox`. LoRA and attention inherit the first pass by default. Selecting a LoRA adds it to the incoming first-pass model at the independent model strength for this face-repair run only; selecting an attention backend overrides only the internal face sampling and restores the first-pass configuration afterward. When Inherit first pass is selected, the face-repair LoRA strength does not reapply an upstream LoRA.
+- Repairs 1–4 faces selected by Main, Center, or Reference Match; fewer detections automatically reduce the processed count.
+- Includes Balanced, Realistic, Distant Face, Anime, and Custom presets, with optional dedicated LoRA and attention settings.
+- Star7 Chunked Decode composites the repaired crops in the final RGB frames, avoiding a full-video VAE re-encode. Connect Face Repair directly to that decoder.
+- Preserve repair detail only enlarges sources below about 1 MP; larger videos are never reduced.
 
-Repair crops remain separate until Star7 Chunked Decode composites them in RGB; neither setting of Preserve repair detail re-encodes the full video. Enabling it restores the legacy ~1 MP minimum output canvas (480×864 becomes 768×1376), before pasting decoded repair crops. Disabling it keeps the source resolution. Larger HD outputs are never shrunk. Use the same video VAE for conditioning and final decode. Place optional HD before Face Repair, then connect directly to Star7 Chunked Decode. Ordinary latent decoders do not read the deferred crops. The hidden legacy IMAGE-output class remains available and shares the same RGB compositor.
-
-The established presets are restored: Balanced 0.30 / crop 2.6, Realistic 0.25 / 2.8, Distant Face 0.48 / 2.4, Anime 0.32 / 2.7. Tracking, per-frame denoise weighting and RGB compositing retain the original FaceRefine-based behavior. Existing Custom settings are preserved; select a preset to adopt its restored parameters.
-
-Missing-subject frames stay on the original audio/video timeline. Incompatible repair frame counts fail explicitly. Higher repair strengths can still change identity or head pose; the decoder integration does not correct content already distorted during generation.
-
-The node supports 1–4 faces, Main, Center, and Reference Match selection, plus Balanced, Realistic, Distant Face, Anime, and Custom presets. If fewer faces are found, it processes the available count. Reference Match optionally uses InsightFace; other modes require no reference image.
-
-On first use, `face_yolov8m.pt` is downloaded, verified, and stored under `ComfyUI/models/ultralytics/bbox`. Connected sockets display prompt tags: `<Picture N>`, `<Video N>`, `<Audio N>`, and the dedicated driving-audio tag `<Audio D>`.
+The verified face detector downloads automatically to `ComfyUI/models/ultralytics/bbox`. Reference Match can optionally use InsightFace; other modes do not require it.
 
 ```text
 Sampler Sampled result -> One-click HD -> One-click Face Repair -> H3 Chunked Decode
@@ -106,15 +103,14 @@ All-in-one Sampling context --------------------^              Video/audio VAEs 
 
 ### H3 One-click HD Upscale
 
-The top-level Enable HD second pass switch returns the latent unchanged without loading the HD model when disabled. The next rows are Latent upscaler model, Second-pass LoRA, Second-pass LoRA strength, and Second-pass attention, followed by the preset and refinement controls. LoRA and attention inherit the first pass by default. A selected LoRA is added to the incoming model at the independent model strength for this HD refinement only; when Inherit first pass is selected, that strength does not reapply an upstream LoRA. Attention can independently select any CK/SLA/Sol/Hybrid path exposed by the chunk node. Every setting remains visible and editable; the switches only decide whether their features run. Enable tiling is a separate VRAM control that builds an overlapping, aspect-aware 2D grid. Target tiles accepts 2–64 and is treated as a lower bound: the grid is chosen to keep tiles reasonably shaped and may round up slightly. For example, 16 requested tiles use 3×6 (18 actual) at 16:9, but 4×4 at 4:3, 3:4, and 1:1. Every boundary follows H3's 2×2 latent-patch alignment, and the report shows requested count, actual count, and grid. Tiling lowers second-pass peak VRAM but increases model calls and runtime; it does not change sigmas, sampler, or audio.
+The node enlarges an H3 sampled latent to the target megapixel count and optionally applies a short second pass. It passes through unchanged when disabled or when the target does not exceed the source resolution.
 
-The HD node does not decode either VAE internally. Connect its output to the independent MiniMax H3 Chunked Decode node, then to Video Combine. The decoder reuses the H3 VAE's native temporal streaming and spatial tiling and is independent from the second-pass tile count. A normal IMAGE output still retains all decoded frames in system memory, so long 4K clips remain RAM-heavy.
+- Balanced, High Quality, Distant Face, and Fast Motion presets pair suitable refinement steps and strength; Custom remains adjustable.
+- LoRA and attention inherit the first pass by default or can be selected independently for refinement. The node displays the effective Sigma, Shift, and detected model profile.
+- Tiling selects an aspect-aware overlapping grid to reduce peak VRAM at the cost of additional runtime.
+- The original prompt and reference conditions are retained; first and last frames are rebuilt at the target resolution.
 
-The latent upscaler model is `minimax_h3_latent_upscaler_3d_fp16.safetensors`. On the first run that actually needs enlargement, a missing default is downloaded from the HF mirror first and Hugging Face second, verified against the pinned SHA-256, and installed in `ComfyUI/models/latent_upscale_models`. Failure messages include the exact target directory and each source error. Only this end-to-end validated FP16 checkpoint is currently exposed; unrelated LTX files and BF16/FP32 precision copies of the same training are not presented as distinct quality models.
-
-The second pass keeps the original prompt and reference conditioning. For first- or last-frame generation, All-in-one Conditioning retains the source endpoint pixels and the HD node VAE-encodes them again at the actual target resolution before refinement. Tiled refinement crops those rebuilt HD keyframes with each tile instead of reusing stale low-resolution keyframe latents.
-
-Each preset pairs its step count and denoise range. Refine strength only selects where refinement starts on the native denoising path: higher values start from a noisier latent and permit more repainting, while `0` disables refinement. Refine steps only subdivide that selected range down to `0`, so adding quality steps no longer silently raises the starting Sigma. The node walks the current prompt ancestry for Turbo/PDD model names and combines that evidence with conservative model-patch inspection: Turbo uses the two/three-step scene recipes, while Base and ordinary LoRAs use four to six steps. An already-applied PDD model must follow its trained discrete tail boundaries, so its effective strength is derived from the selected PDD tail. The node reads the upstream 4/6/8-NFE or custom trained partition and switches to Euler internally, with no separate PDD Scheduler connection required. Distant Small Face expands the repaint range, Fast Motion narrows it, and Custom remains adjustable. A read-only row shows the exact Sigma sequence, video Shift, and detected model profile produced by the backend; the number of model evaluations is one fewer than the number of Sigma values.
+The required model is `minimax_h3_latent_upscaler_3d_fp16.safetensors`. If missing, it is downloaded, verified, and installed under `ComfyUI/models/latent_upscale_models`. VAE decoding remains external; connect the output to MiniMax H3 Chunked Decode.
 
 ```text
 Sampler Sampled result -> One-click HD Sampled result -> H3 Chunked Decode -> Video Combine

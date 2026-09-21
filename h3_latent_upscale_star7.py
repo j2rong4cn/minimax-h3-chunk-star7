@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import copy
+import sys
 import threading
 import time
 import urllib.request
@@ -730,6 +731,93 @@ def _wrap_sampler_for_spatial_tiles(sampler, full_shapes, grid, tiles):
     )
 
 
+def _flush_live_logs() -> None:
+    """Flush ComfyUI and launcher-owned streams after a progress record."""
+    seen = set()
+    for logger in (_LOG, logging.getLogger()):
+        for handler in getattr(logger, "handlers", ()):
+            marker = id(handler)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            try:
+                handler.flush()
+            except Exception:
+                pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+
+
+def _emit_live_info(message: str) -> None:
+    """Send one complete line through ComfyUI's live stderr interceptor."""
+    try:
+        sys.stderr.write(f"[INFO] {message}\n")
+        sys.stderr.flush()
+    except Exception:
+        # Keep progress visible in unusual embedded runtimes that replace
+        # stderr with a non-writable object.
+        _LOG.info("%s", message)
+        _flush_live_logs()
+
+
+def _sample_hd_refinement(noise, guider, sampler, sigmas, latent):
+    """Run the second pass with one live, whole-step log per sigma interval."""
+    import comfy.sample
+    import latent_preview
+
+    output = latent.copy()
+    latent_image = comfy.sample.fix_empty_latent_channels(
+        guider.model_patcher,
+        latent["samples"],
+        latent.get("downscale_ratio_spacial"),
+        latent.get("downscale_ratio_temporal"),
+    )
+    output["samples"] = latent_image
+    noise_mask = output.get("noise_mask")
+    total_steps = max(0, int(sigmas.shape[-1]) - 1)
+    x0_output = {}
+    preview_callback = latent_preview.prepare_callback(
+        guider.model_patcher, total_steps, x0_output
+    )
+    step_started = time.perf_counter()
+    last_logged_step = -1
+
+    def callback(step, x0, x, callback_total):
+        nonlocal step_started, last_logged_step
+        preview_callback(step, x0, x, callback_total)
+        step_index = int(step)
+        if step_index <= last_logged_step:
+            return
+        now = time.perf_counter()
+        elapsed = now - step_started
+        last_logged_step = step_index
+        step_started = now
+        _emit_live_info(
+            "Star7 H3 HD | refine step %d/%d | %.2fs/it"
+            % (step_index + 1, int(callback_total), elapsed)
+        )
+
+    _emit_live_info(f"Star7 H3 HD | refine started | steps={total_steps}")
+    samples = guider.sample(
+        noise.generate_noise(output),
+        latent_image,
+        sampler,
+        sigmas,
+        denoise_mask=noise_mask,
+        callback=callback,
+        disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED,
+        seed=noise.seed,
+    )
+    samples = samples.to(model_management.intermediate_device())
+    output.pop("downscale_ratio_spacial", None)
+    output.pop("downscale_ratio_temporal", None)
+    output["samples"] = samples
+    return output
+
+
 def _add_hd_endpoint_guides(positive, latent, context):
     """Re-encode original first/last frames against the actual HD latent canvas."""
     first_frame = context.get("first_frame")
@@ -1196,7 +1284,7 @@ class MiniMaxH3OneClickHDStar7:
         keyframe_summary = "none"
         if refine_steps > 0 and refine_strength > 0.0:
             from comfy_extras.nodes_custom_sampler import (
-                BasicGuider, BasicScheduler, KSamplerSelect, RandomNoise, SamplerCustomAdvanced,
+                BasicGuider, BasicScheduler, KSamplerSelect, RandomNoise,
             )
 
             output = dict(output)
@@ -1304,11 +1392,22 @@ class MiniMaxH3OneClickHDStar7:
             if attention_runtime_config is not None:
                 chunk_nodes._CONFIG.clear()
                 chunk_nodes._CONFIG.update(attention_runtime_config)
+            transformer_options = refine_model.model_options.setdefault(
+                "transformer_options", {}
+            )
+            timing_marker = "_star7_external_step_timing"
+            had_timing_marker = timing_marker in transformer_options
+            saved_timing_marker = transformer_options.get(timing_marker)
+            transformer_options[timing_marker] = True
             try:
-                sampled = _unpack(SamplerCustomAdvanced.execute(
+                sampled = _sample_hd_refinement(
                     noise, guider, sampler, sigmas, output
-                ))[0]
+                )
             finally:
+                if had_timing_marker:
+                    transformer_options[timing_marker] = saved_timing_marker
+                else:
+                    transformer_options.pop(timing_marker, None)
                 if attention_config_snapshot is not None:
                     # Attention kernels read a small amount of Star7 runtime
                     # state. Restore it even after a failed second pass so a
