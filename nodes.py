@@ -1246,20 +1246,23 @@ def _run_chunked_h3_mlp(
                     "unexpected H3 MLP chunk output: "
                     f"got shape={tuple(result.shape)}, expected shape={expected}"
                 )
-            if output is x and result.dtype != x.dtype:
-                # Preserve the previous safe behavior for an upstream MLP
-                # that deliberately changes the block compute dtype.
-                output = None
-            if output is None:
-                output = torch.empty(
-                    (seq_len, x.shape[1]), dtype=result.dtype, device=result.device
-                )
-            elif result.dtype != output.dtype:
-                raise RuntimeError(
-                    f"H3 MLP output dtype changed between chunks: "
-                    f"{output.dtype} -> {result.dtype}"
-                )
-            output[start:end].copy_(result)
+            if start == 0 and end == seq_len:
+                output = result
+            else:
+                if output is x and result.dtype != x.dtype:
+                    # Preserve the previous safe behavior for an upstream MLP
+                    # that deliberately changes the block compute dtype.
+                    output = None
+                if output is None:
+                    output = torch.empty(
+                        (seq_len, x.shape[1]), dtype=result.dtype, device=result.device
+                    )
+                elif result.dtype != output.dtype:
+                    raise RuntimeError(
+                        f"H3 MLP output dtype changed between chunks: "
+                        f"{output.dtype} -> {result.dtype}"
+                    )
+                output[start:end].copy_(result)
             del result, expanded, chunk_input
             start = end
             calls += 1
@@ -1639,9 +1642,12 @@ def _run_chunked_h3_out_proj(
             if fused_used is not None:
                 _SM75_OUT_PROJ_FUSED_SUPPORT[support_key] = bool(fused_used)
                 fused_chunks = fused_chunks or bool(fused_used)
-            if output is None:
-                output = result.new_empty((sequence, result.shape[-1]))
-            output[start:end].copy_(result)
+            if start == 0 and end == sequence:
+                output = result
+            else:
+                if output is None:
+                    output = result.new_empty((sequence, result.shape[-1]))
+                output[start:end].copy_(result)
             start = end
             calls += 1
             del result
@@ -3100,70 +3106,73 @@ def _prepare_h3_qkv_chunked(
     first_rope_ms = None
     qkv_call = self.qkv_proj
     qkv_weight_mode = "streamed"
-    if (
-        _sm75_qkv_reuse_path(x, configured_chunk)
-        and _CONFIG["reuse_mlp_weights"]
-        and _linear_can_reuse_weights(self.qkv_proj)
-    ):
-        try:
-            qkv_call, prepared_backend = _resident_qkv_caller(self.qkv_proj, x)
-            qkv_weight_mode = f"resident-{prepared_backend}"
-        except Exception as exc:
-            if not _is_cuda_oom(exc):
-                raise
-            exc.__traceback__ = None
-            _clear_cuda_after_oom(x.device)
-            qkv_weight_mode = "streamed-fallback"
-            _LOG.warning(
-                "[Star7 H3 Chunk] Holding the patched QKV weight exceeded VRAM; "
-                "using per-chunk streaming"
-            )
     _set_sequence_status("QKV", sequence)
-    # These complete Q/K/V tensors are required by CK and SLA regardless of
-    # projection chunk size. Retry their allocation once after releasing only
-    # unused allocator cache, but do not pretend that lowering a local chunk can
-    # solve a full-buffer OOM.
-    qkv_buffers = []
-    for allocation_attempt in range(2):
-        try:
-            qkv_buffers = [
-                torch.empty(
-                    (1, heads, sequence, head_dim)
-                    if output_layout == "BHLD"
-                    else (1, sequence, heads, head_dim),
-                    dtype=output_dtype,
-                    device=x.device,
-                )
-            ]
-            qkv_buffers.append(torch.empty_like(qkv_buffers[0]))
-            qkv_buffers.append(torch.empty_like(qkv_buffers[0]))
-            break
-        except Exception as exc:
-            qkv_buffers.clear()
-            if not _is_cuda_oom(exc) or allocation_attempt:
-                if _is_cuda_oom(exc):
-                    required_gib = (
-                        3 * heads * sequence * head_dim
-                        * torch.empty((), dtype=output_dtype).element_size()
-                        / 1024**3
-                    )
-                    _LOG.error(
-                        "[Star7 H3 Chunk] Full Q/K/V buffer OOM | required=%.2fGiB "
-                        "| S=%d | dtype=%s. QKV/MLP/RoPE chunk reduction cannot "
-                        "lower this fixed attention input; reduce reference tokens "
-                        "or canvas size.",
-                        required_gib, sequence, output_dtype,
-                    )
-                raise
-            exc.__traceback__ = None
-            _clear_cuda_after_oom(x.device)
-    q_out, k_out, v_out = qkv_buffers
-    del qkv_buffers
     rope_fn = _ORIGINAL_RMS_ROPE_SPLIT_HALF_INPLACE or quant_ops.ck.rms_rope_split_half_
     start = 0
     block_index = getattr(self, "_star7_block_index", None)
+    q_out = k_out = v_out = None
     while start < sequence:
         end = min(start + chunk, sequence)
+        if start == 0 and end < sequence and v_out is None:
+            if (
+                _sm75_qkv_reuse_path(x, configured_chunk)
+                and _CONFIG["reuse_mlp_weights"]
+                and _linear_can_reuse_weights(self.qkv_proj)
+            ):
+                try:
+                    qkv_call, prepared_backend = _resident_qkv_caller(self.qkv_proj, x)
+                    qkv_weight_mode = f"resident-{prepared_backend}"
+                except Exception as exc:
+                    if not _is_cuda_oom(exc):
+                        raise
+                    exc.__traceback__ = None
+                    _clear_cuda_after_oom(x.device)
+                    qkv_weight_mode = "streamed-fallback"
+                    _LOG.warning(
+                        "[Star7 H3 Chunk] Holding the patched QKV weight exceeded VRAM; "
+                        "using per-chunk streaming"
+                    )
+            # These complete Q/K/V tensors are required by CK and SLA regardless of
+            # projection chunk size. Retry their allocation once after releasing only
+            # unused allocator cache, but do not pretend that lowering a local chunk can
+            # solve a full-buffer OOM.
+            qkv_buffers = []
+            for allocation_attempt in range(2):
+                try:
+                    qkv_buffers = [
+                        torch.empty(
+                            (1, heads, sequence, head_dim)
+                            if output_layout == "BHLD"
+                            else (1, sequence, heads, head_dim),
+                            dtype=output_dtype,
+                            device=x.device,
+                        )
+                    ]
+                    qkv_buffers.append(torch.empty_like(qkv_buffers[0]))
+                    qkv_buffers.append(torch.empty_like(qkv_buffers[0]))
+                    break
+                except Exception as exc:
+                    qkv_buffers.clear()
+                    if not _is_cuda_oom(exc) or allocation_attempt:
+                        if _is_cuda_oom(exc):
+                            required_gib = (
+                                3 * heads * sequence * head_dim
+                                * torch.empty((), dtype=output_dtype).element_size()
+                                / 1024**3
+                            )
+                            _LOG.error(
+                                "[Star7 H3 Chunk] Full Q/K/V buffer OOM | required=%.2fGiB "
+                                "| S=%d | dtype=%s. QKV/MLP/RoPE chunk reduction cannot "
+                                "lower this fixed attention input; reduce reference tokens "
+                                "or canvas size.",
+                                required_gib, sequence, output_dtype,
+                            )
+                        raise
+                    exc.__traceback__ = None
+                    _clear_cuda_after_oom(x.device)
+            q_out, k_out, v_out = qkv_buffers
+            del qkv_buffers
+
         try:
             profile_qkv = bool(profile_total and start == 0)
             qkv_profile_start = time.perf_counter() if profile_qkv else None
@@ -3221,8 +3230,15 @@ def _prepare_h3_qkv_chunked(
                         time.perf_counter() - rope_profile_start
                     ) * 1000.0
                 if output_layout == "BHLD":
-                    q_out[:, :, start:end, :].copy_(q.permute(0, 2, 1, 3))
-                    k_out[:, :, start:end, :].copy_(k.permute(0, 2, 1, 3))
+                    if start == 0 and end == sequence:
+                        q_out = q.permute(0, 2, 1, 3)
+                        k_out = k.permute(0, 2, 1, 3)
+                    else:
+                        q_out[:, :, start:end, :].copy_(q.permute(0, 2, 1, 3))
+                        k_out[:, :, start:end, :].copy_(k.permute(0, 2, 1, 3))
+                elif start == 0 and end == sequence:
+                    q_out = q
+                    k_out = k
                 else:
                     q_out[:, start:end, :, :].copy_(q)
                     k_out[:, start:end, :, :].copy_(k)
@@ -3238,13 +3254,25 @@ def _prepare_h3_qkv_chunked(
                     block_index, row_dim=0, check_fp16_range=True,
                 )
                 if output_layout == "BHLD":
-                    q_out[:, :, start:end, :].copy_(q_norm.permute(1, 0, 2).unsqueeze(0))
-                    k_out[:, :, start:end, :].copy_(k_norm.permute(1, 0, 2).unsqueeze(0))
+                    if start == 0 and end == sequence:
+                        q_out = q_norm.permute(1, 0, 2).unsqueeze(0)
+                        k_out = k_norm.permute(1, 0, 2).unsqueeze(0)
+                    else:
+                        q_out[:, :, start:end, :].copy_(q_norm.permute(1, 0, 2).unsqueeze(0))
+                        k_out[:, :, start:end, :].copy_(k_norm.permute(1, 0, 2).unsqueeze(0))
+                elif start == 0 and end == sequence:
+                    q_out = q_norm.unsqueeze(0)
+                    k_out = k_norm.unsqueeze(0)
                 else:
                     q_out[:, start:end, :, :].copy_(q_norm.unsqueeze(0))
                     k_out[:, start:end, :, :].copy_(k_norm.unsqueeze(0))
             if output_layout == "BHLD":
-                v_out[:, :, start:end, :].copy_(v.permute(1, 0, 2).unsqueeze(0))
+                if start == 0 and end == sequence:
+                    v_out = v.permute(1, 0, 2).unsqueeze(0)
+                else:
+                    v_out[:, :, start:end, :].copy_(v.permute(1, 0, 2).unsqueeze(0))
+            elif start == 0 and end == sequence:
+                v_out = v.unsqueeze(0)
             else:
                 v_out[:, start:end, :, :].copy_(v.unsqueeze(0))
             start = end
