@@ -10,6 +10,7 @@ const PREVIEW_TEXT = {
         title: "MiniMax H3 Live Preview - Star7",
         model: "Model",
         enabled: "Show preview",
+        previewModel: "Preview model",
         frames: "Temporal sample frames",
         resolution: "Preview long edge",
         firstStepOnly: "Show first-step preview only",
@@ -18,6 +19,7 @@ const PREVIEW_TEXT = {
         title: "MiniMax H3 实时预览 - Star7",
         model: "模型",
         enabled: "显示预览",
+        previewModel: "预览模型",
         frames: "时间轴采样帧数",
         resolution: "预览长边",
         firstStepOnly: "只显示第一步预览",
@@ -103,13 +105,11 @@ function localizeNode(node) {
 
     const framesWidget = node.widgets?.find((widget) => widget.name === "preview_frames");
     const enabledWidget = node.widgets?.find((widget) => widget.name === "preview_enabled");
-    const enabledMirror = node.widgets?.find(
-        (widget) => widget.name === "__star7_preview_enabled_ui"
-    );
     const resolutionWidget = node.widgets?.find((widget) => widget.name === "preview_resolution");
     const firstStepWidget = node.widgets?.find((widget) => widget.name === "first_step_only");
     if (enabledWidget) enabledWidget.label = enabledWidget.localized_name = text.enabled;
-    if (enabledMirror) enabledMirror.label = enabledMirror.localized_name = text.enabled;
+    const selectedModel = node.widgets?.find((widget) => widget.name === "preview_model");
+    if (selectedModel) selectedModel.label = selectedModel.localized_name = text.previewModel;
     if (framesWidget) framesWidget.label = framesWidget.localized_name = text.frames;
     if (resolutionWidget) resolutionWidget.label = resolutionWidget.localized_name = text.resolution;
     if (firstStepWidget) firstStepWidget.label = firstStepWidget.localized_name = text.firstStepOnly;
@@ -126,24 +126,47 @@ function findNode(graph, qualifiedId) {
     return current?.getNodeById?.(Number(parts.at(-1))) ?? null;
 }
 
+const PREVIEW_FIELDS = ["preview_frames", "preview_resolution", "first_step_only", "preview_enabled", "preview_model"];
+
 function repairPreviewWidgetValues(configuration) {
-    if (!Array.isArray(configuration?.widgets_values)) return;
-    const values = configuration.widgets_values;
+    const values = configuration?.widgets_values ?? [];
+    const named = configuration?.widgets_values_named ?? {};
+    let positional;
     if (typeof values[0] === "boolean") {
-        // Short-lived 2.12.16 order: enabled, frames, resolution, first-step.
-        const enabled = values[0];
-        const original = values.slice(1);
-        configuration.widgets_values = [
-            original[0], original[1], original[2], enabled,
-            ...original.slice(3),
-        ];
-    } else if (typeof values[3] !== "boolean") {
-        // Original v1 order, optionally followed by the DOM preview placeholder.
-        configuration.widgets_values = [
-            values[0], values[1], values[2], true,
-            ...values.slice(3),
-        ];
+        if (typeof values[1] === "string" && /\.(safetensors|pt|pth|ckpt|bin)$/i.test(values[1])) {
+            positional = [values[2], values[3], values[4], values[0], values[1]];
+        } else {
+            positional = [values[1], values[2], values[3], values[0], values[5]];
+        }
+    } else {
+        positional = values.slice(0, 5);
     }
+    const restored = PREVIEW_FIELDS.map((name, index) => named[name] ?? positional[index]);
+    const frames = Number(restored[0]);
+    const resolution = String(restored[1]);
+    const validFrames = Number.isFinite(frames) && frames >= 4 && frames <= 64;
+    const validResolution = ["256", "384", "512"].includes(resolution);
+    configuration.widgets_values = [
+        validFrames ? Math.round(frames) : 25,
+        validResolution ? resolution : "512",
+        validFrames && validResolution && typeof restored[2] === "boolean" ? restored[2] : false,
+        typeof restored[3] === "boolean" ? restored[3] : true,
+        typeof restored[4] === "string" && /\.(safetensors|pt|pth|ckpt|bin)$/i.test(restored[4])
+            ? restored[4] : "taeh3.safetensors",
+    ];
+}
+
+function orderPreviewWidgets(node, names) {
+    const widgets = node.widgets ?? [];
+    node.widgets = [
+        ...names.map((name) => widgets.find((item) => item.name === name)).filter(Boolean),
+        ...widgets.filter((item) => !names.includes(item.name)),
+    ];
+}
+
+function presentPreviewWidgets(node) {
+    orderPreviewWidgets(node, ["preview_enabled", "preview_model", "preview_frames", "preview_resolution", "first_step_only"]);
+    localizeNode(node);
 }
 
 api.addEventListener(EVENT_NAME, (event) => {
@@ -161,11 +184,12 @@ app.registerExtension({
         nodeData.display_name = text.title;
         const labels = {
             preview_enabled: text.enabled,
+            preview_model: text.previewModel,
             preview_frames: text.frames,
             preview_resolution: text.resolution,
             first_step_only: text.firstStepOnly,
         };
-        for (const [name, spec] of Object.entries(nodeData.input?.required ?? {})) {
+        for (const [name, spec] of Object.entries({ ...nodeData.input?.required, ...nodeData.input?.optional })) {
             if (!labels[name] || !Array.isArray(spec)) continue;
             spec[1] ??= {};
             spec[1].display_name = labels[name];
@@ -175,25 +199,32 @@ app.registerExtension({
             }
         }
 
-        // LiteGraph assigns widgets_values before invoking onConfigure. Repair
-        // positional data at the configure entry point so no wrong value ever
-        // reaches a widget, even transiently.
         const originalNodeConfigure = nodeType.prototype.configure;
         nodeType.prototype.configure = function (configuration) {
             repairPreviewWidgetValues(configuration);
-            const mirrors = [];
-            for (let index = (this.widgets?.length ?? 0) - 1; index >= 0; index -= 1) {
-                if (this.widgets[index]?.name !== "__star7_preview_enabled_ui") continue;
-                mirrors.unshift(this.widgets[index]);
-                this.widgets.splice(index, 1);
-            }
+            const restored = [...configuration.widgets_values];
+            orderPreviewWidgets(this, PREVIEW_FIELDS);
             try {
-                return originalNodeConfigure?.apply(this, arguments);
+                const result = originalNodeConfigure?.apply(this, arguments);
+                PREVIEW_FIELDS.forEach((name, index) => {
+                    const widget = this.widgets?.find((item) => item.name === name);
+                    if (widget) widget.value = restored[index];
+                });
+                this.widgets?.find((item) => item.name === "preview_enabled")?.callback?.(restored[3]);
+                return result;
             } finally {
-                // Positional assignment must see only serialized schema
-                // widgets. Put the visual-only switch back afterwards.
-                this.widgets?.unshift?.(...mirrors);
+                presentPreviewWidgets(this);
             }
+        };
+        const originalSerialize = nodeType.prototype.serialize;
+        nodeType.prototype.serialize = function () {
+            const result = originalSerialize?.apply(this, arguments) ?? {};
+            const named = Object.fromEntries(PREVIEW_FIELDS.map((name) => [
+                name, this.widgets?.find((item) => item.name === name)?.value,
+            ]));
+            result.widgets_values_named = named;
+            result.widgets_values = PREVIEW_FIELDS.map((name) => named[name]);
+            return result;
         };
 
         const original = nodeType.prototype.onNodeCreated;
@@ -501,42 +532,16 @@ app.registerExtension({
                 }
                 this.setDirtyCanvas?.(true, true);
             };
-            const serializedEnabledWidget = this.widgets?.find(
-                (widget) => widget.name === "preview_enabled"
-            );
-            if (serializedEnabledWidget) {
-                const originalEnabledCallback = serializedEnabledWidget.callback;
-                const enabledMirror = this.addWidget(
-                    "toggle",
-                    "__star7_preview_enabled_ui",
-                    Boolean(serializedEnabledWidget.value),
-                    (value) => {
-                        serializedEnabledWidget.value = Boolean(value);
-                        originalEnabledCallback?.call(serializedEnabledWidget, value);
-                        applyEnabledState(Boolean(value));
-                    },
-                    { serialize: false },
-                );
-                enabledMirror.options ??= {};
-                enabledMirror.options.serialize = false;
-                enabledMirror.label = enabledMirror.localized_name = PREVIEW_TEXT[language()].enabled;
-
-                // Keep the real widget in schema order for serialization, but
-                // draw only the mirror at the top of the node.
-                serializedEnabledWidget.hidden = true;
-                serializedEnabledWidget.computeSize = () => [0, -4];
-                const mirrorIndex = this.widgets.indexOf(enabledMirror);
-                if (mirrorIndex >= 0) {
-                    this.widgets.splice(mirrorIndex, 1);
-                    this.widgets.unshift(enabledMirror);
-                }
-                serializedEnabledWidget.callback = (value) => {
-                    enabledMirror.value = Boolean(value);
-                    originalEnabledCallback?.call(serializedEnabledWidget, value);
+            const enabledWidget = this.widgets?.find((item) => item.name === "preview_enabled");
+            if (enabledWidget) {
+                const originalEnabledCallback = enabledWidget.callback;
+                enabledWidget.callback = function (value) {
+                    originalEnabledCallback?.apply(this, arguments);
                     applyEnabledState(Boolean(value));
                 };
-                if (!serializedEnabledWidget.value) applyEnabledState(false);
+                if (!enabledWidget.value) applyEnabledState(false);
             }
+            presentPreviewWidgets(this);
 
             this.addDOMWidget("preview", "star7_h3_preview", root, { serialize: false });
             this.setSize([Math.max(this.size?.[0] ?? 340, 340), Math.max(this.size?.[1] ?? 360, 360)]);

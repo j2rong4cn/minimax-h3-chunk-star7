@@ -30,6 +30,7 @@ from .refine_model_options import (
     INHERIT_FIRST_PASS,
     apply_selected_lora,
     lora_choices,
+    runtime_option_label,
 )
 
 
@@ -597,6 +598,10 @@ def _ensure_face_detector(detector_name: str = _FACE_DETECTOR_NAME) -> str:
             )
         return selected
 
+    installed = folder_paths.get_full_path("ultralytics_bbox", selected)
+    if installed and os.path.getsize(installed) > 1_000_000:
+        return selected
+
     target_dir = os.path.join(folder_paths.models_dir, "ultralytics", "bbox")
     target = os.path.join(target_dir, _FACE_DETECTOR_NAME)
     legacy_target = os.path.join(folder_paths.models_dir, "ultralytics", _FACE_DETECTOR_NAME)
@@ -1041,7 +1046,7 @@ class MiniMaxH3FaceRefineStar7:
             select = "largest_face"
 
         detector = _ensure_face_detector(face_detector)
-        _LOG.debug("Star7 H3 face repair | phase=detect/track | preset=%s", preset)
+        _LOG.debug("Star7 H3 face repair | phase=detect/track | preset=%s", runtime_option_label(preset))
         detect_started = time.perf_counter()
         try:
             tracked = H3FaceTrackCrop().run(
@@ -1061,7 +1066,7 @@ class MiniMaxH3FaceRefineStar7:
         _LOG.debug(
             "Star7 H3 face repair | phase=detect/track completed | %.2fs | frames=%d target=%s",
             time.perf_counter() - detect_started, int(_frame_count),
-            f"multi-face(requested={requested_faces})" if multi_face else target_face,
+            f"multi-face(requested={requested_faces})" if multi_face else runtime_option_label(target_face),
         )
         if not transform.get("boxes"):
             _LOG.warning("Star7 H3 face repair found no usable face; returning original frames")
@@ -1274,7 +1279,7 @@ class MiniMaxH3FaceRefineStar7:
                 f"output={output_width}x{output_height} | "
                 f"{encode_summary} | audio preserved exactly"
             )
-            _LOG.info(result_report)
+            _LOG.debug("%s", result_report)
             return output, result_report
         return (images,)
 

@@ -1,0 +1,25 @@
+The Turing ConvRot quantizers, segmented RMSNorm+AdaLN kernel, and W4A8 SM75
+GEMM tile/epilogue policy under `csrc/turing/` are derived from comfy-kitchen's
+Apache-2.0 CUDA implementation:
+
+  https://github.com/Comfy-Org/comfy-kitchen
+
+The packed Turing W4A8 Tensor Core path uses NVIDIA CUTLASS headers:
+
+  https://github.com/NVIDIA/cutlass
+
+CUTLASS is licensed under the BSD 3-Clause License. Its license text is kept
+in `LICENSES/cutlass-LICENSE.txt`.
+
+The SM75 attention sources are derived from wjie98's Apache-2.0 SageAttention
+branch `feature/turing-sm75-backend`, commit
+`abc695cb9ed9572deb83fd9bb85f0fb815347ebd`, itself derived from SageAttention:
+
+  https://github.com/wjie98/SageAttention/tree/feature/turing-sm75-backend
+  https://github.com/thu-ml/SageAttention
+
+The vendored CUDA and Python support is kept under `csrc/turing/sage` and
+`comfyui_turing_utils_kernel/turing_sage`. Unstable Sage1/Sage2 research is excluded from the
+default bindings and documented under `experiments/turing_sage_variants`.
+SageAttention is licensed under the Apache License, Version 2.0; its license
+text is in `LICENSES/sageattention-LICENSE.txt`.

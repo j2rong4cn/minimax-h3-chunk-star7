@@ -221,6 +221,7 @@ function setCompactWidgetVisible(widget, visible) {
         widget.__star7OriginalComputeSize = widget.computeSize;
         widget.__star7OriginalComputedHeight = widget.computedHeight;
     }
+    widget.hidden = !visible;
     if (visible) {
         widget.type = widget.__star7OriginalType;
         if (widget.__star7OriginalComputeSize === undefined) {
@@ -232,7 +233,8 @@ function setCompactWidgetVisible(widget, visible) {
     } else {
         // Keep the widget in node.widgets so prompt/workflow serialization
         // remains positional; collapse only its canvas layout and drawing.
-        widget.type = "converted-widget:star7-trim";
+        widget.type = typeof widget.drawWidget === "function"
+            ? widget.__star7OriginalType : "converted-widget:star7-trim";
         widget.computeSize = () => [0, -4];
         widget.computedHeight = 0;
     }
@@ -733,6 +735,36 @@ function refreshImageAspectControls(node) {
 }
 
 function installImageAspectControls(node) {
+    const ratio = node.widgets?.find((widget) => widget.name === "目标比例");
+    if (ratio?.drawWidget && !ratio.__star7ImageRatioDrawInstalled) {
+        ratio.__star7ImageRatioDrawInstalled = true;
+        const originalDraw = ratio.drawWidget;
+        ratio.drawWidget = function (ctx, options) {
+            if (this.hidden) return;
+            return originalDraw.call(this, ctx, {
+                ...options, width: Math.min(options.width, node.size?.[0] ?? options.width),
+            });
+        };
+    }
+    const limit = node.widgets?.find((widget) => widget.name === "最长边");
+    if (limit && !limit.__star7ImageLimitInstalled) {
+        limit.__star7ImageLimitInstalled = true;
+        const refreshLimit = () => {
+            const megapixels = Number(limit.value) > 0 && Number(limit.value) <= 10;
+            limit.options ??= {};
+            limit.options.precision = megapixels ? 2 : 0;
+            limit.options.step = megapixels ? 0.1 : 32;
+            limit.options.round = 0.01;
+        };
+        const originalLimitCallback = limit.callback;
+        limit.callback = function () {
+            const result = originalLimitCallback?.apply(this, arguments);
+            refreshLimit();
+            return result;
+        };
+        limit.__star7RefreshLimit = refreshLimit;
+    }
+    limit?.__star7RefreshLimit?.();
     const toggle = node.widgets?.find((widget) => widget.name === "调整比例");
     if (!toggle) return;
     if (!node.__star7ImageAspectInstalled) {
@@ -1276,6 +1308,7 @@ app.registerExtension({
                 localizeImageLoadScaleNode(this);
                 installImageAspectControls(this);
                 installReferenceMediaDrop(this, "image");
+                setTimeout(() => refreshImageAspectControls(this), 0);
             };
             const originalConfigure = nodeType.prototype.configure;
             nodeType.prototype.configure = function () {
@@ -1283,6 +1316,7 @@ app.registerExtension({
                 localizeImageLoadScaleNode(this);
                 installImageAspectControls(this);
                 installReferenceMediaDrop(this, "image");
+                setTimeout(() => refreshImageAspectControls(this), 0);
                 return result;
             };
             return;

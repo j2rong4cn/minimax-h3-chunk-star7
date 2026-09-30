@@ -90,7 +90,14 @@ const graphNode = {
         { name: "preview_frames", value: 25 },
         { name: "preview_resolution", value: "512" },
         { name: "first_step_only", value: false },
+        { name: "preview_enabled", value: true },
+        { name: "preview_model", value: "taeh3.safetensors", options: { values: ["taeh3.safetensors", "custom.safetensors"] } },
     ],
+    addWidget(type, name, value, callback, options) {
+        const widget = { type, name, value, callback, options };
+        this.widgets.push(widget);
+        return widget;
+    },
     addDOMWidget(_name, _type, element) { this.previewRoot = element; },
     setSize(size) { this.size = size; },
     setDirtyCanvas() {},
@@ -143,6 +150,15 @@ vm.runInNewContext(source, context);
 
 class PreviewNodeType {}
 PreviewNodeType.prototype.onNodeCreated = function () {};
+PreviewNodeType.prototype.configure = function (configuration) {
+    configuration.widgets_values.forEach((value, index) => {
+        if (this.widgets[index]) this.widgets[index].value = value;
+    });
+    this.onConfigure?.(configuration);
+};
+PreviewNodeType.prototype.serialize = function () {
+    return { widgets_values: this.widgets.map((widget) => widget.value) };
+};
 const nodeData = {
     name: "MiniMaxH3LivePreviewStar7",
     input: {
@@ -159,8 +175,37 @@ assert.equal(nodeData.input.required.preview_frames[1].display_name, "Temporal s
 Object.setPrototypeOf(graphNode, PreviewNodeType.prototype);
 graphNode.onNodeCreated();
 assert.equal(graphNode.title, "MiniMax H3 Live Preview - Star7");
-assert.equal(graphNode.widgets[0].label, "Temporal sample frames");
-assert.equal(graphNode.widgets[2].label, "Show first-step preview only");
+assert.equal(graphNode.widgets[0].label, "Show preview");
+assert.equal(graphNode.widgets[1].label, "Preview model");
+for (const values of [[25, "512", false], [true, 25, "512", false], [true, 25, "512", false, true, ""]]) {
+    graphNode.configure({ widgets_values: [...values] });
+    assert.equal(graphNode.widgets.find((item) => item.name === "preview_model").value, "taeh3.safetensors");
+    assert.equal(graphNode.widgets.find((item) => item.name === "preview_frames").value, 25);
+}
+graphNode.configure({ widgets_values: [16, "384", true, true, "custom.safetensors"] });
+for (let round = 0; round < 3; round++) {
+    const saved = JSON.parse(JSON.stringify(graphNode.serialize()));
+    assert.deepEqual(saved.widgets_values, [16, "384", true, true, "custom.safetensors"]);
+    graphNode.configure(saved);
+    assert.equal(graphNode.widgets[0].name, "preview_enabled");
+    assert.equal(graphNode.widgets[1].name, "preview_model");
+    assert.equal(graphNode.widgets.find((item) => item.name === "preview_frames").value, 16);
+}
+graphNode.configure({
+    widgets_values: [true, "taeh3.safetensors", null, 25, true],
+    widgets_values_named: { preview_frames: 25, preview_resolution: "512", first_step_only: false, preview_enabled: true },
+});
+assert.equal(graphNode.widgets.find((item) => item.name === "preview_frames").value, 25);
+assert.equal(graphNode.widgets.find((item) => item.name === "preview_resolution").value, "512");
+assert.equal(graphNode.widgets.find((item) => item.name === "first_step_only").value, false);
+graphNode.configure({ widgets_values: [true, "custom.safetensors", 16, "384", false] });
+assert.equal(graphNode.widgets[1].value, "custom.safetensors");
+assert.equal(graphNode.widgets.find((item) => item.name === "preview_frames").value, 16);
+graphNode.configure({ widgets_values: [true, "taeh3.safetensors", null, 25, true] });
+assert.equal(graphNode.widgets.find((item) => item.name === "preview_frames").value, 25);
+assert.equal(graphNode.widgets.find((item) => item.name === "preview_resolution").value, "512");
+assert.equal(graphNode.widgets.find((item) => item.name === "first_step_only").value, false);
+graphNode.configure({ widgets_values: [25, "512", false, true, "taeh3.safetensors"] });
 
 previewEvent({
     detail: {

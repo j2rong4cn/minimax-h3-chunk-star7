@@ -67,6 +67,47 @@ def test_hd_refinement_reports_each_complete_step_once():
     assert "refine step 2/3" in messages[2]
     assert "refine step 3/3" in messages[3]
 
+    messages.clear()
+    with (
+        mock.patch.dict(sys.modules, {"latent_preview": fake_preview}),
+        mock.patch("comfy.sample.fix_empty_latent_channels", side_effect=lambda _, value, *args: value),
+        mock.patch.object(hd_module.model_management, "intermediate_device", return_value=torch.device("cpu")),
+        mock.patch.object(hd_module, "_emit_live_info", side_effect=messages.append),
+    ):
+        _sample_hd_refinement(
+            noise, FakeGuider(), SimpleNamespace(_star7_spatial_tile_count=4),
+            torch.tensor([1.0, 0.6, 0.3, 0.0]), latent,
+        )
+    assert messages == ["Star7 H3 HD | refine started | steps=3 | tiles=4"]
+
+
+def test_four_tile_progress_reports_each_prediction_separately():
+    video = torch.ones((1, 1, 1, 16, 16))
+    audio = torch.ones((1, 1, 1, 4))
+    packed, shapes = comfy.utils.pack_latents([video, audio])
+
+    class Model:
+        latent_image = None
+        noise = None
+
+        def __call__(self, value, _sigma, **_kwargs):
+            return value * 2
+
+    grid, tiles = _spatial_tile_plan(video, 4, 32)
+    assert len(tiles) == 4
+    proxy = _SpatialTileModel(Model(), shapes, grid, tiles)
+    messages = []
+    with (
+        mock.patch.object(hd_module, "_emit_live_info", side_effect=messages.append),
+        mock.patch.object(hd_module.time, "perf_counter", side_effect=range(16)),
+    ):
+        for sigma in (0.8, 0.6):
+            output = proxy(packed, torch.tensor([sigma]))
+            assert torch.allclose(output, packed * 2)
+    assert len(messages) == 8
+    for index, message in enumerate(messages):
+        assert f"prediction {index // 4 + 1} | tile {index % 4 + 1}/4 | 1.00s/tile" in message
+
 
 def test_live_hd_log_flushes_the_launcher_stream_immediately():
     class LiveStream:

@@ -223,7 +223,7 @@ class TAEH3BackgroundDownload:
                     if os.path.isfile(final_path):
                         valid, actual = validate_taeh3_file(final_path)
                         if valid:
-                            logging.info("%s %s SHA256 verified", LOG_PREFIX, filename)
+                            logging.debug("%s %s SHA256 verified", LOG_PREFIX, filename)
                             with results_lock:
                                 results[filename] = (True, None)
                             return
@@ -439,20 +439,28 @@ def send_status(node_id, run_id, status, message=None, total=None):
     PromptServer.instance.send_sync(EVENT_NAME, payload, PromptServer.instance.client_id)
 
 
-def load_taeh3():
+def _preview_model_choices():
+    return list(dict.fromkeys([
+        *TAEH3_FILENAMES, *folder_paths.get_filename_list("vae_approx"),
+    ]))
+
+
+def load_taeh3(preview_model=TAEH3_FILENAME):
     paths = []
-    for filename in TAEH3_FILENAMES:
+    filenames = TAEH3_FILENAMES if preview_model == TAEH3_FILENAME else (preview_model,)
+    for filename in filenames:
         path = folder_paths.get_full_path("vae_approx", filename)
         if path is not None and path not in paths:
             paths.append(path)
     if not paths:
-        names = " or ".join(TAEH3_FILENAMES)
+        names = " or ".join(filenames)
         raise FileNotFoundError(f"{names} not found in models/vae_approx")
 
     invalid_files = []
     for path in paths:
         try:
-            valid, actual = validate_taeh3_file(path)
+            pinned = preview_model in TAEH3_FILENAMES
+            valid, actual = validate_taeh3_file(path) if pinned else (True, "")
             if not valid:
                 invalid_files.append(
                     f"{os.path.basename(path)} SHA256 mismatch ({actual[:12]}…)"
@@ -463,13 +471,13 @@ def load_taeh3():
             vae.throw_exception_if_invalid()
             if vae.latent_channels != 24 or vae.first_stage_model.__class__.__name__ != "TAEHV":
                 raise TAEH3CoreUnsupported(
-                    "TAEH3 SHA256 is valid, but this ComfyUI core cannot create a 24-channel TAEHV decoder; update ComfyUI core"
+                    "Selected preview model must be a 24-channel H3 TAEHV decoder"
                 )
             filename = os.path.basename(path)
             if filename not in _TAEH3_SELECTED_LOGGED:
                 _TAEH3_SELECTED_LOGGED.add(filename)
                 logging.info(
-                    "%s using %s (SHA256 verified, 24-channel TAEHV)",
+                    "%s using %s (24-channel TAEHV)",
                     LOG_PREFIX,
                     filename,
                 )
@@ -478,27 +486,30 @@ def load_taeh3():
             raise
         except Exception as error:
             raise TAEH3CoreUnsupported(
-                f"{os.path.basename(path)} SHA256 is valid, but this ComfyUI core failed to load 24-channel TAEHV ({error}); update ComfyUI core"
+                f"Unable to load H3 preview decoder {os.path.basename(path)}: {error}"
             ) from error
     raise TAEH3RepairRequired(
         "no SHA256-valid TAEH3 decoder found; " + "; ".join(invalid_files)
     )
 
 
-def load_taeh3_or_start_download():
+def load_taeh3_or_start_download(preview_model=TAEH3_FILENAME):
     try:
-        vae = load_taeh3()
+        vae = load_taeh3(preview_model)
         # Fill the alternate filename in the background without delaying preview.
-        _TAEH3_DOWNLOAD.start()
+        if preview_model in TAEH3_FILENAMES:
+            _TAEH3_DOWNLOAD.start()
         return vae, None
     except (FileNotFoundError, TAEH3RepairRequired) as error:
+        if preview_model not in TAEH3_FILENAMES:
+            raise
         logging.warning("%s %s; starting verified background repair", LOG_PREFIX, error)
         _TAEH3_DOWNLOAD.start()
         done, error = _TAEH3_DOWNLOAD.state()
         if error is not None:
             raise RuntimeError(f"taeh3.safetensors automatic download failed: {error}")
         if done:
-            return load_taeh3(), None
+            return load_taeh3(preview_model), None
         return None, "Downloading taeh3.safetensors in the background"
 
 
@@ -557,11 +568,12 @@ def decode_preview(vae, video, frame_count, resolution):
 
 
 class H3LivePreviewWrapper:
-    def __init__(self, preview_frames, preview_resolution, first_step_only, node_id):
+    def __init__(self, preview_frames, preview_resolution, first_step_only, node_id, preview_model=TAEH3_FILENAME):
         self.preview_frames = int(preview_frames)
         self.preview_resolution = int(preview_resolution)
         self.first_step_only = bool(first_step_only)
         self.node_id = str(node_id) if node_id is not None else None
+        self.preview_model = preview_model
 
     def __call__(self, executor, noise, latent_image, sampler, sigmas, denoise_mask, callback, disable_pbar, seed, latent_shapes=None):
         run_id = str(time.monotonic_ns())
@@ -576,7 +588,7 @@ class H3LivePreviewWrapper:
             if PromptServer is None:
                 raise RuntimeError("ComfyUI PromptServer is unavailable")
             worker = LatestPreviewWorker(self.node_id, run_id)
-            vae, pending_message = load_taeh3_or_start_download()
+            vae, pending_message = load_taeh3_or_start_download(self.preview_model)
             send_status(
                 self.node_id,
                 run_id,
@@ -613,7 +625,7 @@ class H3LivePreviewWrapper:
                 return
             try:
                 if vae is None:
-                    vae, pending_message = load_taeh3_or_start_download()
+                    vae, pending_message = load_taeh3_or_start_download(self.preview_model)
                     if vae is None:
                         return
                     send_status(self.node_id, run_id, "start", total=total_steps)
@@ -661,6 +673,12 @@ class MiniMaxH3LivePreviewStar7:
                 # The frontend presents a non-serialized mirror at the top.
                 "preview_enabled": ("BOOLEAN", {"default": True}),
             },
+            "optional": {
+                "preview_model": (_preview_model_choices(), {
+                    "default": TAEH3_FILENAME,
+                    "tooltip": "H3 TAEHV preview decoder in models/vae_approx. The recommended taeh3.safetensors remains listed before download.",
+                }),
+            },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
@@ -678,6 +696,7 @@ class MiniMaxH3LivePreviewStar7:
         first_step_only=False,
         preview_enabled=True,
         unique_id=None,
+        preview_model=TAEH3_FILENAME,
     ):
         # Disabled means truly absent: no model clone, sampler wrapper, decoder
         # loading, background download, callback or frontend transport.
@@ -697,6 +716,7 @@ class MiniMaxH3LivePreviewStar7:
                 preview_resolution,
                 first_step_only,
                 unique_id,
+                preview_model,
             ),
         )
         return (patched,)

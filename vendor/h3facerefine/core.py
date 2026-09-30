@@ -26,6 +26,9 @@ def _trace(message: str) -> None:
 
 def _detector_list() -> list[str]:
     """Face detectors, from Impact subpack's ultralytics_bbox registration if present."""
+    base = folder_paths.models_dir
+    for sub in ("bbox", ""):
+        folder_paths.add_model_folder_path("ultralytics_bbox", os.path.join(base, "ultralytics", sub))
     names: list[str] = []
     for key in ("ultralytics_bbox", "ultralytics"):
         try:

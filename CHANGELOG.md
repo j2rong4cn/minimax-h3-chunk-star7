@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.17.3 - 2026-10-01
+
+- Add native SM75 W4A8 dispatch with CK fallback and preserve VDN hybrid attention.
+- Add selectable H3 preview/upscale models and keep recommended model names visible before download.
+- Fix preview workflow restoration and reference-image controls on newer frontends.
+- Support crop-aware megapixel limits for reference images without enlargement.
+- Report HD refinement timing per tile and use concise English runtime messages.
+- Detect checkpoint formats from internal metadata and tensor layouts; unvalidated QuantFunc INT4 remains unsupported.
+
 ## 2.16.3 - 2026-09-21
 
 - Fix delayed or incomplete step timing in launcher consoles, including tiled HD second passes.

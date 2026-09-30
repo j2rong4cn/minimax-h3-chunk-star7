@@ -1,4 +1,6 @@
 import logging
+import json
+import struct
 import sys
 import weakref
 from collections import Counter
@@ -13,6 +15,7 @@ import comfy.model_detection
 import comfy.model_management
 import comfy.ops
 import comfy.patcher_extension
+import comfy.quant_ops
 import comfy.sd
 import comfy.supported_models
 import comfy.utils
@@ -403,7 +406,117 @@ def _normalize_h3_state_dict(state_dict, metadata):
     return state_dict, metadata
 
 
+def inspect_h3_checkpoint_format(unet_path):
+    """Read format evidence from the safetensors header, never the model name."""
+    with open(unet_path, "rb") as checkpoint:
+        size_bytes = checkpoint.read(8)
+        if len(size_bytes) != 8:
+            raise ValueError("Incomplete checkpoint header")
+        header_size = struct.unpack("<Q", size_bytes)[0]
+        if not 2 <= header_size <= 64 * 1024 * 1024:
+            if not str(unet_path).lower().endswith(".safetensors"):
+                return {"family": "comfy_other", "formats": ()}
+            raise ValueError("Invalid safetensors header length")
+        header = json.loads(checkpoint.read(header_size))
+    metadata = header.pop("__metadata__", {})
+    formats = set()
+    layer_formats = {}
+    quantization = metadata.get("_quantization_metadata")
+    if quantization is not None:
+        quantization = json.loads(quantization)
+        layers = quantization.get("layers", {})
+        if not isinstance(layers, dict):
+            raise ValueError("Quantization metadata layers must be an object")
+        for name, layer in layers.items():
+            if not isinstance(layer, dict) or not isinstance(layer.get("format"), str):
+                raise ValueError("Quantized layer is missing a format field")
+            formats.add(layer["format"])
+            layer_formats[name] = layer["format"]
+
+    # ComfyUI also stores small per-layer JSON descriptors as U8 tensors.
+    # Read these descriptors only; integer weights alone do not identify INT4.
+    with open(unet_path, "rb") as checkpoint:
+        for key, tensor in header.items():
+            if not key.endswith(".comfy_quant"):
+                continue
+            lo, hi = tensor["data_offsets"]
+            if tensor["dtype"] != "U8" or not 0 <= lo < hi or hi - lo > 65536:
+                raise ValueError(f"Invalid quantization descriptor tensor: {key}")
+            checkpoint.seek(8 + header_size + lo)
+            descriptor = json.loads(checkpoint.read(hi - lo))
+            fmt = descriptor.get("format")
+            if not isinstance(fmt, str):
+                raise ValueError(f"Quantization descriptor is missing a format: {key}")
+            layer = key[:-len(".comfy_quant")]
+            if layer in layer_formats and layer_formats[layer] != fmt:
+                raise ValueError(f"Conflicting quantization metadata: {layer}")
+            layer_formats[layer] = fmt
+            formats.add(fmt)
+
+    packed = [key[:-8] for key in header if key.endswith(".qweight")]
+    if packed:
+        kinds = set()
+        for prefix in packed:
+            def tensor(name):
+                return header.get(prefix + "." + name, {})
+
+            qshape = tensor("qweight").get("shape", [])
+            wshape = tensor("wscales").get("shape", [])
+            down = tensor("proj_down")
+            up = tensor("proj_up")
+            if (tensor("qweight").get("dtype") == "I8"
+                    and len(qshape) == 2 and len(wshape) == 2
+                    and wshape[1] == qshape[0] and wshape[0] * 64 == qshape[1] * 2):
+                if (down.get("dtype") == "I8" and up.get("dtype") == "I8"
+                        and tensor("resq_vr").get("dtype") == "I8"
+                        and tensor("wgsums") and tensor("resq_vr_scale")):
+                    kinds.add("quantfunc_int4_layout")
+                    continue
+                if (down.get("dtype") in ("F16", "BF16")
+                        and up.get("dtype") in ("F16", "BF16")
+                        and tensor("smooth_factor")):
+                    kinds.add("public_svdquant_int4")
+                    continue
+            kinds.add("unknown_packed")
+        if kinds == {"quantfunc_int4_layout"} and metadata.get("quantfunc_metadata_kv") == "1":
+            family = "quantfunc_h3_int4"
+        elif len(kinds) == 1:
+            family = next(iter(kinds))
+        else:
+            family = "mixed_packed"
+    elif metadata.get("quantfunc_metadata_kv") == "1":
+        family = "quantfunc_other"
+    elif formats:
+        family = "comfy_quantized"
+    else:
+        family = "comfy_native"
+    return {"family": family, "formats": tuple(sorted(formats))}
+
+
+def _check_h3_checkpoint_format(unet_path):
+    detected = inspect_h3_checkpoint_format(unet_path)
+    family = detected["family"]
+    logging.debug("[Star7 H3 Loader] Internal format=%s | layer formats=%s",
+                 family, ",".join(detected["formats"]) or "native")
+    if family == "quantfunc_h3_int4":
+        raise ValueError(
+            "QuantFunc H3 INT4 detected from checkpoint contents. "
+            "The independent backend has not passed native forward validation; "
+            "standard INT4 and public SVDQuant backends cannot load this format."
+        )
+    if family in ("public_svdquant_int4", "quantfunc_int4_layout", "unknown_packed", "mixed_packed", "quantfunc_other"):
+        raise ValueError(
+            f"No validated Star7 backend is available for checkpoint format {family}. "
+            "INT4 bit width alone does not identify the required kernel."
+        )
+    unsupported = set(detected["formats"]) - set(comfy.quant_ops.QUANT_ALGOS)
+    if unsupported:
+        raise ValueError(f"Quantization formats are not registered in this runtime: {', '.join(sorted(unsupported))}")
+    return detected
+
+
 def _load_h3_native_fp16(unet_path, disable_dynamic=False):
+    _check_h3_checkpoint_format(unet_path)
     _neutralize_process_wide_h3_conflicts()
     state_dict, metadata = comfy.utils.load_torch_file(
         unet_path, return_metadata=True
@@ -460,6 +573,7 @@ class MiniMaxH3FP16LoaderStar7:
         unet_path = folder_paths.get_full_path_or_raise(
             "diffusion_models", unet_name
         )
+        _check_h3_checkpoint_format(unet_path)
         supported, reason = _supports_fp16_fix()
         if not supported:
             native_bf16 = bool(
@@ -484,7 +598,7 @@ class MiniMaxH3FP16LoaderStar7:
                 ),
             )
 
-        logging.info("[Star7 H3 FP16] Loading at creation-time FP16 | device=%s", reason)
+        logging.debug("[Star7 H3 FP16] Loading at creation-time FP16 | device=%s", reason)
         return (_load_h3_native_fp16(unet_path),)
 
 

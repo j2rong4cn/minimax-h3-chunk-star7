@@ -29,7 +29,7 @@ def _allowed_output_path(path):
         os.path.realpath(folder_paths.get_temp_directory()),
     )
     if not any(os.path.commonpath((root, resolved)) == root for root in roots):
-        raise ValueError(f"视频必须位于 ComfyUI 的 output 或 temp 目录：{resolved}")
+        raise ValueError(f"Video must be inside the ComfyUI output or temp directory: {resolved}")
     return resolved
 
 
@@ -74,7 +74,7 @@ def _resolve_video_and_vhs_files(value):
         None,
     )
     if video_path is None:
-        raise ValueError("没有从输入中找到有效的视频文件。可直接连接 VHS 的 filenames 输出或视频文件路径输出。")
+        raise ValueError("No valid video file found. Connect the VHS filenames output or a video path.")
 
     vhs_files = []
     if (
@@ -115,7 +115,7 @@ def _replace_video_with_retry(source_path, video_path, attempts=600, delay=0.2):
                 break
             time.sleep(max(0.0, float(delay)))
     raise PermissionError(
-        f"无法写回视频，文件仍被预览器、播放器或安全软件占用：{video_path}"
+        f"Cannot replace video while it is in use by another application: {video_path}"
     ) from last_error
 
 
@@ -154,7 +154,7 @@ def _remux_metadata(video_path, workflow, prompt, include_workflow):
             subprocess.run(args, capture_output=True, check=True)
         except subprocess.CalledProcessError as error:
             message = error.stderr.decode("utf-8", errors="replace").strip()
-            raise RuntimeError(f"FFmpeg 写入工作流失败：{message}") from error
+            raise RuntimeError(f"FFmpeg failed to embed the workflow: {message}") from error
         _replace_video_with_retry(output_path, video_path)
     finally:
         if metadata_path and os.path.exists(metadata_path):
@@ -203,7 +203,7 @@ def _save_workflow_png(video_path, vhs_files, workflow, prompt, extra_pnginfo):
             )
         except subprocess.CalledProcessError as error:
             message = error.stderr.decode("utf-8", errors="replace").strip()
-            raise RuntimeError(f"FFmpeg 提取工作流图片失败：{message}") from error
+            raise RuntimeError(f"FFmpeg failed to extract the workflow image: {message}") from error
         source_path = extracted_path
     try:
         _write_workflow_png(source_path, output_path, workflow, prompt, extra_pnginfo)
@@ -251,7 +251,7 @@ class Star7VideoWorkflowExport:
     def export(self, 视频文件, 导出方式, prompt=None, extra_pnginfo=None):
         workflow = (extra_pnginfo or {}).get("workflow")
         if workflow is None:
-            raise ValueError("当前任务没有可写入的 ComfyUI 工作流。")
+            raise ValueError("No ComfyUI workflow is available to export.")
         video_path, vhs_files = _resolve_video_and_vhs_files(视频文件)
 
         if 导出方式 == _EMBED_MODE:
@@ -263,10 +263,14 @@ class Star7VideoWorkflowExport:
         elif 导出方式 == _PNG_MODE:
             _save_workflow_png(video_path, vhs_files, workflow, prompt, extra_pnginfo)
         else:
-            raise ValueError(f"未知导出方式：{导出方式}")
+            raise ValueError(f"Unknown export mode: {导出方式}")
 
         _prune_vhs_files(vhs_files, video_path, 导出方式 == _PNG_MODE)
-        _LOG.info("[Star7 Workflow Export] %s | %s", 导出方式, video_path)
+        mode_label = {
+            _EMBED_MODE: "embedded workflow", _VIDEO_ONLY_MODE: "video only",
+            _JSON_MODE: "video + workflow JSON", _PNG_MODE: "video + workflow PNG",
+        }[导出方式]
+        _LOG.info("[Star7 Workflow Export] %s | %s", mode_label, video_path)
         # Ensure ComfyUI emits this output node's executed event. The frontend
         # then refreshes VHS after the MP4 is atomically replaced with the
         # metadata-bearing copy.

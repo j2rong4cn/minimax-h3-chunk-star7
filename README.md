@@ -160,6 +160,7 @@ git clone https://github.com/star7code/minimax-h3-chunk-star7.git
 | 节点 | 用途 |
 |---|---|
 | `MiniMax H3 增强载入 - Star7` | 分块项目内置的独立 H3 模型载入节点；按 GPU 架构选择受保护 FP16 或原生 BF16，保留量化分发，并使用独立类 ID 避免与 FP16 项目冲突 |
+| `MiniMax H3 VDN 加速 - Star7` | 加载完整 VDN stage，自动安装混合注意力与配套 Adapter；支持 8 步 DMD 和 50 步原始模式 |
 | `MiniMax H3 显存分块加速 - Star7` | QKV/RoPE/MLP 分块、注意力输出显存保护、自动降档和注意力加速选择 |
 | `MiniMax H3 实时预览 - Star7` | 每个采样步骤后用 TAEH3 显示覆盖完整时间轴的循环动画 |
 | `参考视频载入 - Star7` | 支持直接拖入视频，完成载入、时间范围裁切和最长边限制，输出同一时间窗的画面与音频 |
@@ -174,6 +175,10 @@ git clone https://github.com/star7code/minimax-h3-chunk-star7.git
 三个载入节点均支持将对应文件直接拖到节点上完成载入；它们都是独立工具，不会向模型注入注意力或精度补丁。
 
 多合一条件节点会在已连接素材后显示提示词标签：`<Picture N>`、`<Video N>`、`<Audio N>`；驱动音频固定为 `<Audio D>`。
+
+VDN 节点连接在 H3 模型载入与 Star7 分块节点之间。将完整 DMD8 stage 放入 `ComfyUI/models/vdn/<模型目录>`；推荐使用 INT8 ConvRot 版。请载入未预先融合 Turbo/其他 LoRA 的 H3 基础模型；VDN 自带配套适配器。分块节点会自动保留 VDN 注意力。
+
+参考图最长边限制支持 `0` 保持原尺寸、`0 < 值 ≤ 10` 按百万像素只缩小，以及大于 `10` 的最长边像素限制；启用比例调整时先裁切后缩小。预览模型可在节点内选择，旧工作流自动恢复参数。高清分格日志逐格记录每轮预测耗时。
 
 ### H3 一键人脸修复
 

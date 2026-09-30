@@ -325,7 +325,7 @@ def _extract_file(file_object, filename):
         with av.open(file_object, mode="r") as container:
             metadata = dict(container.metadata)
         return _rank(_collect_metadata(metadata, source)), source
-    raise ValueError(f"不支持的文件类型：{extension or 'unknown'}")
+    raise ValueError(f"Unsupported file type: {extension or 'unknown'}")
 
 
 def _find_companion(filename):

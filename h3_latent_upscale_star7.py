@@ -27,17 +27,13 @@ from .refine_model_options import (
     INHERIT_FIRST_PASS,
     apply_selected_lora,
     lora_choices,
+    runtime_option_label,
 )
 
 
 _LOG = logging.getLogger("Star7H3LatentUpscale")
 _CONTEXT_TYPE = "STAR7_H3_REFINE_CONTEXT"
 _MODEL_NAME = "minimax_h3_latent_upscaler_3d_fp16.safetensors"
-# Only checkpoints validated end-to-end by this node belong here. The public
-# BF16/FP32 files are precision copies of the same training and this runtime
-# deliberately computes the learned handoff in FP16, so listing them would add
-# download size without offering another quality model.
-_MODEL_VARIANTS = (_MODEL_NAME,)
 _MODEL_SHA256 = "043e5a48e161610ef6c3ea974645220354d06fa618abca15f76d084812eb55c2"
 _MODEL_URLS = (
     "https://hf-mirror.com/LBH-123-AI/Minimax_h3_latent_Upscaler/resolve/main/"
@@ -130,17 +126,18 @@ def _model_directory() -> Path:
 
 def _model_choices():
     _model_directory()
-    # This folder is shared with LTX and other latent upscalers. Only expose
-    # reviewed H3 3D variants so an unrelated checkpoint is never presented as
-    # a valid choice merely because it has a supported file extension.
-    return list(_MODEL_VARIANTS)
+    return [_MODEL_NAME, *(
+        name for name in folder_paths.get_filename_list("latent_upscale_models")
+        if name != _MODEL_NAME
+    )]
 
 
 def _ensure_model(model_name: str = _MODEL_NAME) -> Path:
     selected = str(model_name or _MODEL_NAME).strip()
-    if Path(selected).name != selected:
-        raise RuntimeError(f"Invalid H3 latent-upscaler filename: {selected!r}")
-    target = _model_directory() / selected
+    resolved = folder_paths.get_full_path("latent_upscale_models", selected)
+    if resolved is None and selected != _MODEL_NAME:
+        raise RuntimeError(f"Selected H3 latent-upscaler model is missing: {selected!r}")
+    target = Path(resolved) if resolved is not None else _model_directory() / _MODEL_NAME
     with _MODEL_LOCK:
         if target.is_file():
             # Unknown local checkpoints are architecture-validated by
@@ -159,12 +156,6 @@ def _ensure_model(model_name: str = _MODEL_NAME) -> Path:
             raise RuntimeError(
                 f"H3 latent-upscaler model checksum mismatch: {target}. "
                 "Delete the damaged or unsupported file and run again."
-            )
-
-        if selected != _MODEL_NAME:
-            raise RuntimeError(
-                f"Selected H3 latent-upscaler model is missing: '{target}'. "
-                f"Place a compatible 3D checkpoint in '{target.parent}' or select '{_MODEL_NAME}'."
             )
 
         failures = []
@@ -586,11 +577,13 @@ class _SpatialTileModel:
         self._full_shapes = full_shapes
         self._grid = grid
         self._tiles = tiles
+        self._prediction_index = 0
 
     def __getattr__(self, name):
         return getattr(self._model, name)
 
     def __call__(self, packed_x, sigma, **extra_args):
+        self._prediction_index += 1
         streams = comfy.utils.unpack_latents(packed_x, self._full_shapes)
         video, audio = streams[0], streams[1] if len(streams) > 1 else None
         windows, denominator = _tile_windows(
@@ -674,7 +667,17 @@ class _SpatialTileModel:
                     self._model.noise, _ = comfy.utils.pack_latents(parts)
 
                 try:
+                    if video.is_cuda:
+                        torch.cuda.synchronize(video.device)
+                    tile_started = time.perf_counter()
                     tile_result = self._model(tile_x, sigma, **tile_args)
+                    if video.is_cuda:
+                        torch.cuda.synchronize(video.device)
+                    _emit_live_info(
+                        "Star7 H3 HD | refine prediction %d | tile %d/%d | %.2fs/tile"
+                        % (self._prediction_index, tile_index + 1, len(self._tiles),
+                           time.perf_counter() - tile_started)
+                    )
                 finally:
                     if tile_transformer_options is not None:
                         if had_tile_marker:
@@ -724,11 +727,13 @@ def _wrap_sampler_for_spatial_tiles(sampler, full_shapes, grid, tiles):
         return original_function(proxy, x, sigmas, **kwargs)
 
     sample_with_tiles.__name__ = f"star7_tiled_{getattr(original_function, '__name__', 'sampler')}"
-    return comfy.samplers.KSAMPLER(
+    wrapped = comfy.samplers.KSAMPLER(
         sample_with_tiles,
         extra_options=dict(getattr(sampler, "extra_options", {}) or {}),
         inpaint_options=dict(getattr(sampler, "inpaint_options", {}) or {}),
     )
+    wrapped._star7_spatial_tile_count = len(tiles)
+    return wrapped
 
 
 def _flush_live_logs() -> None:
@@ -764,7 +769,7 @@ def _emit_live_info(message: str) -> None:
 
 
 def _sample_hd_refinement(noise, guider, sampler, sigmas, latent):
-    """Run the second pass with one live, whole-step log per sigma interval."""
+    """Report individual tiled predictions, or whole steps when not tiled."""
     import comfy.sample
     import latent_preview
 
@@ -784,6 +789,7 @@ def _sample_hd_refinement(noise, guider, sampler, sigmas, latent):
     )
     step_started = time.perf_counter()
     last_logged_step = -1
+    tile_count = int(getattr(sampler, "_star7_spatial_tile_count", 1))
 
     def callback(step, x0, x, callback_total):
         nonlocal step_started, last_logged_step
@@ -795,12 +801,17 @@ def _sample_hd_refinement(noise, guider, sampler, sigmas, latent):
         elapsed = now - step_started
         last_logged_step = step_index
         step_started = now
-        _emit_live_info(
-            "Star7 H3 HD | refine step %d/%d | %.2fs/it"
-            % (step_index + 1, int(callback_total), elapsed)
-        )
+        if tile_count > 1:
+            _LOG.debug("Star7 H3 HD | refine step %d/%d | tiles=%d | total=%.2fs",
+                       step_index + 1, int(callback_total), tile_count, elapsed)
+        else:
+            _emit_live_info(
+                "Star7 H3 HD | refine step %d/%d | %.2fs/it"
+                % (step_index + 1, int(callback_total), elapsed)
+            )
 
-    _emit_live_info(f"Star7 H3 HD | refine started | steps={total_steps}")
+    _emit_live_info(f"Star7 H3 HD | refine started | steps={total_steps}"
+                    + (f" | tiles={tile_count}" if tile_count > 1 else ""))
     samples = guider.sample(
         noise.generate_noise(output),
         latent_image,
@@ -1250,9 +1261,9 @@ class MiniMaxH3OneClickHDStar7:
         refine_steps = max(1, min(50, int(refine_steps)))
         refine_strength = max(0.0, min(0.50, float(refine_strength)))
 
-        _LOG.info(
+        _LOG.debug(
             "Star7 H3 HD | profile=%s preset=%s target=%.2fMP refine=%d strength=%.2f",
-            profile_name, preset, target_megapixels, refine_steps, refine_strength,
+            profile_name, runtime_option_label(preset), target_megapixels, refine_steps, refine_strength,
         )
         upscale_started = time.perf_counter()
         output, video, original_audio, source_w, source_h, output_w, output_h, resized = (
@@ -1260,7 +1271,7 @@ class MiniMaxH3OneClickHDStar7:
         )
         upscale_seconds = time.perf_counter() - upscale_started
         if resized:
-            _LOG.info(
+            _LOG.debug(
                 "Star7 H3 HD | latent upscale completed | %dx%d -> %dx%d | %.2fs",
                 source_w, source_h, output_w, output_h, upscale_seconds,
             )
@@ -1317,7 +1328,7 @@ class MiniMaxH3OneClickHDStar7:
                 sampler_name = "res_multistep"
             sigma_values = [float(value) for value in sigmas.detach().float().cpu().reshape(-1)]
             sigma_summary = ",".join(f"{value:.4f}" for value in sigma_values)
-            _LOG.info(
+            _LOG.debug(
                 "Star7 H3 HD | internal sigmas=[%s] | %s scheduler",
                 sigma_summary, scheduler_name,
             )
@@ -1329,7 +1340,7 @@ class MiniMaxH3OneClickHDStar7:
                 positive, output, context
             )
             if keyframe_summary != "none":
-                _LOG.info(
+                _LOG.debug(
                     "Star7 H3 HD | endpoint guides re-encoded at %dx%d | %s",
                     output_w, output_h, keyframe_summary,
                 )
@@ -1453,7 +1464,7 @@ class MiniMaxH3OneClickHDStar7:
 
         total = time.perf_counter() - started
         report = (
-            f"Star7 H3 HD completed | preset={preset} | {source_w}x{source_h} -> "
+            f"Star7 H3 HD completed | preset={runtime_option_label(preset)} | {source_w}x{source_h} -> "
             f"{output_w}x{output_h} ({output_w * output_h / 1_000_000:.2f} MP) | "
             f"upscaler={upscale_model} | "
             f"refine={refine_steps} step(s) strength={refine_strength:.2f} | "
@@ -1468,7 +1479,11 @@ class MiniMaxH3OneClickHDStar7:
             f"upscale={upscale_seconds:.2f}s refine={refine_seconds:.2f}s total={total:.2f}s | "
             "audio preserved exactly"
         )
-        _LOG.info(report)
+        _LOG.info(
+            "Star7 H3 HD completed | %dx%d -> %dx%d | profile=%s | refine=%d | total=%.2fs",
+            source_w, source_h, output_w, output_h, profile_name, refine_steps, total,
+        )
+        _LOG.debug("%s", report)
         return output, report
 
 

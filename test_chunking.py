@@ -1491,6 +1491,25 @@ def test_reference_image_uses_long_edge_controls():
     assert chunk_nodes._normalize_reference_max_long_edge(1024) == 1024
 
 
+def test_reference_image_megapixel_limit_never_enlarges():
+    assert chunk_nodes._normalize_reference_image_limit(1.5) == 1.5
+    assert chunk_nodes._normalize_reference_image_limit(0) == 0
+    assert chunk_nodes._normalize_reference_image_limit(1280) == 1280
+    assert chunk_nodes._reference_image_limit_size(1600, 900, 1.5, True) == (1600, 900)
+    assert chunk_nodes._reference_image_limit_size(1600, 900, 0, True) == (1600, 900)
+    width, height = chunk_nodes._reference_image_limit_size(1600, 900, 1.0, True)
+    assert width * height <= 1_000_000
+    assert abs(width / height - 16 / 9) < 0.002
+    assert chunk_nodes._reference_image_limit_size(1920, 1080, 1280) == chunk_nodes._long_edge_reference_size(1920, 1080, 1280)
+
+
+def test_reference_image_megapixels_are_applied_after_cropping():
+    box = chunk_nodes._reference_image_crop_box(2000, 1000, "1:1")
+    width, height = box[2] - box[0], box[3] - box[1]
+    assert chunk_nodes._reference_image_limit_size(width, height, 1.5) == (1000, 1000)
+    assert chunk_nodes._reference_image_limit_size(width, height, 0.5) == (707, 707)
+
+
 def test_reference_video_frame_count_is_h3_aligned():
     assert chunk_nodes._align_h3_reference_frame_count(360) == 345
     assert chunk_nodes._align_h3_reference_frame_count(480) == 464

@@ -8,6 +8,15 @@ import folder_paths
 INHERIT_FIRST_PASS = "继承一采"
 
 
+def runtime_option_label(value):
+    return {
+        "继承一采": "inherit first pass", "平衡高清": "balanced", "高质量": "high quality",
+        "远景小脸": "distant faces", "高速运动": "fast motion", "自定义": "custom",
+        "自动平衡": "auto balanced", "真人保真": "identity preservation", "动漫角色": "anime",
+        "主人物": "main subject", "画面中央": "frame centre", "参考图匹配": "reference match",
+    }.get(value, value)
+
+
 def lora_choices() -> list[str]:
     return [INHERIT_FIRST_PASS, *folder_paths.get_filename_list("loras")]
 

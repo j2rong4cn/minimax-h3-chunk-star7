@@ -15,8 +15,13 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
+try:
+    from . import star7_w4a8
+except ImportError:
+    import star7_w4a8
+
 _LOG = logging.getLogger("MiniMaxH3ActivationChunkStar7")
-NODE_VERSION = "2.16.3"
+NODE_VERSION = "2.17.3"
 FP16_EXACT_PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 HYBRID_ALL_INT8_BACKEND_NAME = "hybrid_sm75_ck_sla_all_int8"
 SM86PLUS_BACKEND_NAME = "sla_sm80+_qk_int8_pv_bf16"
@@ -179,6 +184,28 @@ def _canonical_attention_backend(attention_backend: str) -> str:
         LEGACY_SM86PLUS_ALL_INT8_BACKEND_NAME: SM86PLUS_ALL_INT8_BACKEND_NAME,
         LEGACY_SOL_SM86PLUS_ALL_INT8_BACKEND_NAME: SOL_SM86PLUS_ALL_INT8_BACKEND_NAME,
     }.get(attention_backend, attention_backend)
+
+
+def _model_has_vdn_attention(model) -> bool:
+    """Return True when the incoming MODEL already owns VDN hybrid attention.
+
+    VDN is a complete trained attention replacement.  Installing CK/SLA/Sol/VSA
+    after it would silently discard the VDN softmax/linear split, so the chunk
+    node must preserve it regardless of a stale workflow widget value.
+    """
+    try:
+        options = model.model_options.get("transformer_options", {})
+        if options.get("star7_vdn_h3"):
+            return True
+    except Exception:
+        pass
+    for key, patch in getattr(model, "object_patches", {}).items():
+        if not str(key).endswith(".attn.forward"):
+            continue
+        function = getattr(patch, "__func__", patch)
+        if getattr(function, "_vdn_forward", False):
+            return True
+    return False
 
 
 def _vsa_backend_for_attention(attention_backend: str) -> Optional[str]:
@@ -1030,6 +1057,14 @@ def _resident_linear_forward(linear, x, weight, bias, quant_mode):
     return linear._forward(x, weight, bias)
 
 
+def _make_native_w4a8_forward(upstream_forward):
+    def forward(self, x, weight, bias):
+        result = star7_w4a8.try_forward(self, x, weight, bias)
+        return upstream_forward(x, weight, bias) if result is None else result
+
+    return forward
+
+
 def _resident_qkv_caller(linear, x: torch.Tensor):
     """Prepare one private QKV weight snapshot for all token chunks."""
     import comfy.ops
@@ -1048,11 +1083,11 @@ def _resident_qkv_caller(linear, x: torch.Tensor):
         compute_dtype=x.dtype,
         want_requant=quant_mode is not None,
     ) as (weight, bias):
-        private_weight = weight.detach().clone() if weight is not None else None
+        if isinstance(weight, comfy.ops.QuantizedTensor):
+            private_weight = weight.clone()
+        else:
+            private_weight = weight.detach().clone() if weight is not None else None
         private_bias = bias.detach().clone() if bias is not None else None
-    if quant_mode == "weight-only":
-        private_weight = private_weight.to(dtype=x.dtype)
-
     def call(value):
         return _resident_linear_forward(
             linear, value, private_weight, private_bias, quant_mode
@@ -1064,6 +1099,63 @@ def _resident_qkv_caller(linear, x: torch.Tensor):
         else "dense"
     )
     return call, prepared_backend
+
+
+def _resident_fp16_exact_mlp_callers(mlp, x: torch.Tensor):
+    """Prepare the FP16 Exact MLP's two quantized linears once per block call.
+
+    The FP16 companion intentionally computes SwiGLU in FP32 and rescales the
+    down projection.  Repeating its normal Linear wrappers for every token
+    chunk also repeats weight preparation, so keep private snapshots for the
+    duration of this MLP invocation.  Any unsupported/patched Linear falls
+    back to the original wrapper in the caller.
+    """
+    import comfy.ops
+
+    if not (_linear_can_reuse_weights(mlp.fc1) and _linear_can_reuse_weights(mlp.fc2)):
+        raise RuntimeError("MLP Linear implementation does not support resident weight reuse")
+    # Keep this optimization exclusive to the H3 W4A8 model.  Other INT8
+    # layouts and attention backends must continue through their native paths.
+    if any(
+        getattr(linear, "quant_format", None) != "asym_w4a8_int8"
+        for linear in (mlp.fc1, mlp.fc2)
+    ):
+        raise RuntimeError("MLP weights are not asym_w4a8_int8")
+
+    callers = []
+    backends = []
+    for linear in (mlp.fc1, mlp.fc2):
+        quant_mode = _linear_quantization_mode(linear)
+        stage_dtype = linear.weight.dtype if quant_mode == "weight-only" else x.dtype
+        with comfy.ops.CastBiasWeightContext(
+            linear,
+            input=None,
+            dtype=stage_dtype,
+            device=x.device,
+            bias_dtype=x.dtype,
+            offloadable=True,
+            compute_dtype=x.dtype,
+            want_requant=quant_mode is not None,
+        ) as (weight, bias):
+            if isinstance(weight, comfy.ops.QuantizedTensor):
+                private_weight = weight.clone()
+            else:
+                private_weight = weight.detach().clone() if weight is not None else None
+            private_bias = bias.detach().clone() if bias is not None else None
+
+        def call(value, input_act=None, linear=linear, weight=private_weight, bias=private_bias,
+                 quant_mode=quant_mode):
+            if input_act == "swiglu":
+                if quant_mode != "weight-only" or getattr(linear, "pre_quant_scale", None) is not None:
+                    return None
+                comfy.ops.run_every_op()
+                return star7_w4a8.try_forward(linear, value, weight, bias, input_act="swiglu")
+            return _resident_linear_forward(linear, value, weight, bias, quant_mode)
+
+        callers.append(call)
+        backends.append("quantized" if isinstance(private_weight, comfy.ops.QuantizedTensor) else "dense")
+
+    return callers[0], callers[1], "+".join(backends)
 
 
 def _run_chunked_h3_mlp(
@@ -1091,6 +1183,24 @@ def _run_chunked_h3_mlp(
     current_chunk = min(chunk, seq_len)
     auto_halve = bool(_CONFIG["auto_halve_on_oom"])
     mode = "upstream-preserved" if upstream_forward is not None else "native"
+    resident_callers = None
+    # The only upstream MLP wrapper we can reproduce exactly is the Star7
+    # FP16 companion: FP32 SwiGLU plus the K_FC2 rescale around fc2.
+    upstream_source = _callable_source(upstream_forward) if upstream_forward is not None else ""
+    if (
+        upstream_forward is not None
+        and _CONFIG["reuse_mlp_weights"]
+        and (
+            bool(_CONFIG.get("fp16_exact_present"))
+            or "minimax-h3-fp16-exact-star7" in upstream_source
+        )
+        and x.ndim == 2
+    ):
+        try:
+            resident_callers = _resident_fp16_exact_mlp_callers(self, x)
+            mode = "fp16-exact-resident"
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            _LOG.debug("[Star7 H3 MLP] resident preparation unavailable: %s", exc)
     shape_key = (
         seq_len, x.shape[1], current_chunk, x.dtype, x.device.type, mode,
     )
@@ -1107,7 +1217,17 @@ def _run_chunked_h3_mlp(
                 f"MLP input chunk [{start}:{end}]", chunk_input,
                 block_index, row_dim=0, check_fp16_range=True,
             )
-            if upstream_forward is not None:
+            if resident_callers is not None:
+                fc1_call, fc2_call, _ = resident_callers
+                projected = fc1_call(chunk_input)
+                result = fc2_call(projected, input_act="swiglu")
+                if result is None:
+                    gate, up = projected.chunk(2, dim=-1)
+                    activated = torch.nn.functional.silu(gate.to(torch.float32)).mul_(up.to(torch.float32))
+                    result = fc2_call((activated / 256.0).to(torch.float16)).to(torch.float32).mul_(256.0)
+                    del gate, up, activated
+                del projected
+            elif upstream_forward is not None:
                 result = upstream_forward(chunk_input)
             else:
                 expanded = self.fc1(chunk_input)
@@ -1158,8 +1278,9 @@ def _run_chunked_h3_mlp(
     if do_profile:
         _PROFILED_MLP_SHAPES.add(profile_key)
         _LOG.info(
-            "[Star7 H3 Chunk] First-block MLP | S=%d | chunk=%d x %d | mode=%s",
+            "[Star7 H3 Chunk] First-block MLP | S=%d | chunk=%d x %d | mode=%s%s",
             seq_len, current_chunk, calls, mode,
+            " | w4a8=" + star7_w4a8.runtime_summary() if resident_callers is not None else "",
         )
 
     _log_h3_cuda_memory("after-mlp", x.device, block_index=block_index)
@@ -1701,6 +1822,8 @@ def _sampling_step_context(transformer_options: dict):
 
 def _step_backend_label(transformer_options: dict):
     configured = _CONFIG.get("attention_backend", "existing")
+    if transformer_options.get("star7_vdn_h3") and configured == "existing":
+        return "VDN hybrid", "VDN"
     if configured in HYBRID_BACKEND_NAMES:
         try:
             _, _, backend = _hybrid_sampling_context(transformer_options)
@@ -2943,7 +3066,7 @@ def _install_integrated_vsa(model, attention_backend: str, verbose: bool):
 
 def _prepare_h3_qkv_chunked(
     self, x, rope_freqs, mm, quant_ops, output_dtype: Optional[torch.dtype] = None,
-    output_layout: str = "BHLD",
+    output_layout: str = "BHLD", raw_capture=None,
 ):
     """Prepare contiguous backend-layout Q/K/V in token chunks.
 
@@ -3065,6 +3188,14 @@ def _prepare_h3_qkv_chunked(
                 v, block_index, row_dim=0, check_fp16_range=True,
             )
             v = v.view(end - start, heads, head_dim)
+            if raw_capture is not None:
+                raw_capture(
+                    start,
+                    end,
+                    q.view(end - start, heads, head_dim),
+                    k.view(end - start, heads, head_dim),
+                    v,
+                )
             if rope_freqs is not None:
                 q = q.view(1, end - start, heads, head_dim)
                 k = k.view(1, end - start, heads, head_dim)
@@ -3249,12 +3380,7 @@ def _validate_sm80_h3_compute_dtype(model, capability):
         "model has no Star7 FP16 Exact overflow protection. Chunk has not "
         "modified the model and sampling has not started. Check the launcher "
         "settings: remove --fp16-unet/use BF16, or reload the model with the "
-        "latest Star7 H3 loader to enable protected FP16. / 上游精度配置错误，"
-        "任务已在分块和注意力计算前终止：SM80+ 上的 MiniMax H3 被载入为"
-        "未保护的 FP16。显卡本身支持 FP16，但当前上游模型没有安装 Star7 "
-        "FP16 Exact 溢出保护；分块节点尚未修改模型，采样也尚未开始。请自行"
-        "检查启动器参数：关闭 FP16 UNet/改用 BF16，或使用最新版 Star7 H3 "
-        "载入节点重新载入模型以启用受保护的 FP16。"
+        "latest Star7 H3 loader to enable protected FP16."
     )
 
 
@@ -3272,6 +3398,13 @@ def install_model_patch(
     out_proj_chunk_tokens: int = 4096,
 ):
     _neutralize_process_wide_h3_conflicts()
+    if _model_has_vdn_attention(model) and attention_backend != "existing":
+        _LOG.warning(
+            "[Star7 H3 Chunk] VDN hybrid attention detected; preserving it and "
+            "ignoring the requested backend %s. The chunk node is using existing.",
+            attention_backend,
+        )
+        attention_backend = "existing"
     requested_attention_backend = attention_backend
     attention_backend = _canonical_attention_backend(attention_backend)
     if attention_backend != requested_attention_backend:
@@ -3336,6 +3469,7 @@ def install_model_patch(
     _adapt_pruned_h3_lora(patched, diffusion_model, verbose=verbose)
 
     transformer_options = patched.model_options.setdefault("transformer_options", {})
+    transformer_options["star7_h3_chunk"] = NODE_VERSION
     star7_fp16 = bool(transformer_options.get("star7_minimax_h3_fp16_exact_fix"))
     _CONFIG["fp16_exact_present"] = star7_fp16
     transformer_options.pop("star7_h3_sm75_auto_fp16_exact", None)
@@ -3544,6 +3678,23 @@ def install_model_patch(
                 ),
             )
 
+    # Intercept only the prepared contraction. Existing FP16 Exact wrappers
+    # still own out_proj scaling, condition projection and FP32 residuals.
+    if capability == (7, 5) and star7_fp16:
+        for index, block in enumerate(diffusion_model.blocks):
+            for component in ("attn.qkv_proj", "attn.out_proj", "mlp.fc1", "mlp.fc2"):
+                owner, name = component.split(".")
+                linear = getattr(getattr(block, owner), name)
+                if getattr(linear, "quant_format", None) != "asym_w4a8_int8":
+                    continue
+                path = f"diffusion_model.blocks.{index}.{component}._forward"
+                upstream = patched.object_patches.get(path, linear._forward)
+                upstream = _weak_callable(_star7_wrapper_original(upstream, "w4a8-upstream"))
+                forward = _make_native_w4a8_forward(upstream)
+                forward._star7_wrapper_kind = "w4a8-upstream"
+                forward._star7_original_forward = upstream
+                patched.add_object_patch(path, _weak_method(linear, forward))
+
     # Chunk only controls token tiling. If another node already patched the MLP
     # (including FP16 Exact), invoke that exact upstream callable per tile rather
     # than copying its precision formula into this project.
@@ -3576,7 +3727,8 @@ def install_model_patch(
             else "upstream"
         )
         selected_attention = (
-            attention_patch_name if sla_attention
+            "VDN hybrid" if _model_has_vdn_attention(patched)
+            else attention_patch_name if sla_attention
             else "comfy-kitchen-int8" if ck_attention
             else "sage-qk-int8" if sage_attention
             else attention_patch_name
@@ -3865,6 +4017,29 @@ def _normalize_reference_max_long_edge(value, default: int = 1024) -> int:
     if value == 0:
         return 0
     return int(default) if value < 32 else min(8192, value)
+
+
+def _normalize_reference_image_limit(value):
+    try:
+        limit = float(value)
+    except (TypeError, ValueError):
+        return 1280
+    if 0 <= limit <= 10:
+        return limit
+    return _normalize_reference_max_long_edge(value, 1280)
+
+
+def _reference_image_limit_size(width, height, limit, allow_upscale=False):
+    if limit == 0:
+        return width, height
+    if 0 < limit <= 10:
+        area = width * height
+        target_area = limit * 1_000_000
+        if area <= target_area:
+            return width, height
+        scale = (target_area / area) ** 0.5
+        return max(1, int(width * scale)), max(1, int(height * scale))
+    return _long_edge_reference_size(width, height, limit, allow_upscale, 32)
 
 
 _REFERENCE_IMAGE_ASPECT_RATIOS = (
@@ -4226,13 +4401,14 @@ class MiniMaxH3LoadImageScaleStar7:
             "required": {
                 "image": (sorted(files), {"image_upload": True}),
                 "最长边": (
-                    "INT",
+                    "FLOAT",
                     {
                         "default": 1280,
                         "min": 0,
                         "max": 8192,
                         "step": 32,
-                        "tooltip": "Preserve aspect ratio and limit the image to this H3-aligned long edge; zero keeps the source size.",
+                        "round": 0.01,
+                        "tooltip": "0 keeps source size. Values up to 10 limit megapixels after cropping without enlargement; larger values limit the longest edge in pixels.",
                     },
                 ),
                 "允许小图放大": (
@@ -4270,7 +4446,7 @@ class MiniMaxH3LoadImageScaleStar7:
         import numpy as np
         from PIL import Image, ImageOps
 
-        max_long_edge = _normalize_reference_max_long_edge(kwargs.get("最长边", 1280), 1280)
+        max_long_edge = _normalize_reference_image_limit(kwargs.get("最长边", 1280))
         allow_upscale = bool(kwargs.get("允许小图放大", False))
         crop_aspect = bool(kwargs.get("调整比例", False))
         target_aspect = str(kwargs.get("目标比例", "16:9"))
@@ -4292,14 +4468,9 @@ class MiniMaxH3LoadImageScaleStar7:
             else:
                 mask = torch.zeros((1, rgb.shape[0], rgb.shape[1]), dtype=loaded.dtype)
         source_height, source_width = map(int, loaded.shape[1:3])
-        max_long_edge = _normalize_reference_max_long_edge(max_long_edge, 1280)
-        if max_long_edge == 0:
-            width, height = source_width, source_height
-        else:
-            width, height = _long_edge_reference_size(
-                source_width, source_height, max_long_edge,
-                bool(allow_upscale), 32,
-            )
+        width, height = _reference_image_limit_size(
+            source_width, source_height, max_long_edge, bool(allow_upscale),
+        )
         if (width, height) == (source_width, source_height):
             return loaded, mask
 
@@ -4317,7 +4488,7 @@ class MiniMaxH3LoadImageScaleStar7:
             )
         _LOG.info(
             "[Star7 H3 Ref Image] %dx%d -> crop=%dx%d -> %dx%d | aspect=%s | "
-            "max_long_edge=%d | allow_upscale=%s",
+            "size_limit=%g | allow_upscale=%s",
             original_width, original_height, source_width, source_height, width, height,
             target_aspect if crop_aspect else "original",
             max_long_edge, bool(allow_upscale),
@@ -4333,7 +4504,7 @@ class MiniMaxH3LoadImageScaleStar7:
         digest = hashlib.sha256()
         with open(image_path, "rb") as handle:
             digest.update(handle.read())
-        max_long_edge = _normalize_reference_max_long_edge(kwargs.get("最长边", 1280), 1280)
+        max_long_edge = _normalize_reference_image_limit(kwargs.get("最长边", 1280))
         allow_upscale = bool(kwargs.get("允许小图放大", False))
         crop_aspect = bool(kwargs.get("调整比例", False))
         target_aspect = str(kwargs.get("目标比例", "16:9"))

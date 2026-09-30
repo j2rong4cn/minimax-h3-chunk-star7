@@ -597,4 +597,35 @@ referenceNode.resizeFromCanvas([700, 1100]);
 await Promise.resolve();
 assert.deepEqual(referenceNode.size, [700, 720]);
 assert.deepEqual([...referenceNode.__star7ReferenceFrameSize], [700, 720]);
+let ratioDrawWidth;
+const imageNode = {
+    size: [340, 500],
+    widgets: [
+        { name: "调整比例", value: false },
+        { name: "目标比例", type: "combo", drawWidget(_ctx, options) { ratioDrawWidth = options.width; } },
+        { name: "最长边", value: 1280, options: {} },
+    ],
+    setDirtyCanvas() {},
+};
+context.installImageAspectControls(imageNode);
+const imageRatio = imageNode.widgets[1];
+assert.equal(imageRatio.hidden, true);
+imageRatio.drawWidget({}, { width: 760 });
+assert.equal(ratioDrawWidth, undefined);
+imageNode.widgets[0].value = true;
+imageNode.widgets[0].callback();
+assert.equal(imageRatio.hidden, false);
+imageRatio.drawWidget({}, { width: 760 });
+assert.equal(ratioDrawWidth, 340);
+const imageLimit = imageNode.widgets[2];
+imageLimit.value = 1.5;
+imageLimit.callback();
+assert.equal(imageLimit.options.precision, 2);
+assert.equal(imageLimit.value, 1.5);
+imageLimit.value = 0;
+imageLimit.callback();
+assert.equal(imageLimit.value, 0);
+imageLimit.value = 1280;
+imageLimit.callback();
+assert.equal(imageLimit.options.precision, 0);
 console.log("Runtime status localization and workflow restore tests passed");

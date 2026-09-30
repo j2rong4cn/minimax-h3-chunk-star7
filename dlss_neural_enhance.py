@@ -99,21 +99,21 @@ def _sha256(path: Path) -> str:
 
 def _validate_model(path: Path, require_known_hash: bool) -> str:
     if not path.is_file():
-        raise Star7DLSSNRError(f"模型文件不存在 / model file not found: {path}")
+        raise Star7DLSSNRError(f"Model file not found: {path}")
     size = path.stat().st_size
     if size < 150 * 1024 * 1024:
         raise Star7DLSSNRError(
-            f"模型文件不完整 / incomplete model ({size} bytes): {path}. "
-            "可能是下载中断或 Git LFS 指针。"
+            f"Incomplete model ({size} bytes): {path}. "
+            "The download may be incomplete or a Git LFS pointer."
         )
     with path.open("rb") as stream:
         if stream.read(2) != b"MZ":
-            raise Star7DLSSNRError(f"模型格式错误 / invalid Windows PE model: {path}")
+            raise Star7DLSSNRError(f"Invalid Windows PE model: {path}")
     digest = _sha256(path)
     if require_known_hash and digest not in _KNOWN_MODEL_SHA256:
         raise Star7DLSSNRError(
-            "模型校验失败 / model SHA-256 mismatch: "
-            f"{digest}. 下载源可能返回了错误页面、损坏文件或未知版本。"
+            "Model SHA-256 mismatch: "
+            f"{digest}. The source may have returned an error page, damaged file, or unknown version."
         )
     return digest
 
@@ -139,7 +139,7 @@ def _download_model_worker() -> None:
                     with zipfile.ZipFile(archive) as package:
                         members = [name for name in package.namelist() if Path(name).name.lower() == "nvngx_dlssnr.dll"]
                         if len(members) != 1:
-                            raise Star7DLSSNRError("下载压缩包中未找到唯一的 nvngx_dlssnr.dll。")
+                            raise Star7DLSSNRError("The archive must contain exactly one nvngx_dlssnr.dll.")
                         with package.open(members[0]) as source, candidate.open("wb") as output:
                             while True:
                                 block = source.read(8 * 1024 * 1024)
@@ -189,11 +189,10 @@ def _ensure_model_available() -> None:
     if not _MODEL.is_file():
         detail = _DOWNLOAD_ERROR or "unknown download failure"
         raise Star7DLSSNRError(
-            "缺少 DLSS Neural Rendering 模型，且所有自动下载源均失败。\n"
             "Missing nvngx_dlssnr.dll and all automatic download sources failed.\n"
-            f"目标位置 / destination: {_MODEL}\n"
-            f"失败详情 / details:\n{detail}\n"
-            "请检查网络、代理、防火墙和磁盘空间，也可以手动将模型放到上述位置。"
+            f"Destination: {_MODEL}\n"
+            f"Details:\n{detail}\n"
+            "Check network access and disk space, or install the model manually."
         )
 
 
@@ -432,7 +431,7 @@ class Star7DLSSNeuralEnhance:
             raise ValueError("DLSS Neural Rendering requires images of at least 64×64 pixels.")
 
         if 风格预设 == _LEGACY_PRESET:
-            print(f"[INFO] {_LOG} migrated removed V1 preset '真实风格加强' to safer V2 preset '真实风格'.")
+            print(f"[INFO] {_LOG} migrated legacy enhanced-realistic preset to realistic preset.")
             风格预设 = "真实风格"
         settings = _settings(
             风格预设,
@@ -453,8 +452,12 @@ class Star7DLSSNeuralEnhance:
             )
 
         cpu = 图像.detach().to(device="cpu", dtype=torch.float32).clamp_(0.0, 1.0)
+        preset_label = {
+            "真实风格": "realistic", "真实人像优化": "portrait",
+            "3D 动漫风格": "3D anime", "2D 动漫风格": "2D anime", "自定义参数": "custom",
+        }.get(风格预设, "custom")
         print(
-            f"[INFO] {_LOG} preset={风格预设} | {width}×{height} -> "
+            f"[INFO] {_LOG} preset={preset_label} | {width}×{height} -> "
             f"{output_width}×{output_height} ({actual_megapixels:.2f} MP) | "
             f"frames={batch} | in-process GPU NR"
         )

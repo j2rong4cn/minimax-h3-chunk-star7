@@ -70,6 +70,7 @@ Sparse attention is not guaranteed to outperform CK at every resolution, duratio
 | Node | Purpose |
 |---|---|
 | `MiniMax H3 Enhanced Loader - Star7` | Independent H3 model loader bundled with this project; selects protected FP16 or native BF16 by GPU architecture, preserves quantized dispatch, and uses a distinct class ID to avoid conflicts with the standalone FP16 project |
+| `MiniMax H3 VDN Acceleration - Star7` | Applies a complete VDN stage with its trained hybrid attention and adapters; supports DMD8 and the 50-step base mode |
 | `MiniMax H3 VRAM Chunk Acceleration - Star7` | QKV/RoPE/MLP chunking, targeted OOM reduction, and attention selection |
 | `Reference Video Load - Star7` | Drag-and-drop video loading, time-range trimming, long-edge limiting, synchronized video/audio output |
 | `Reference Image Load - Star7` | Drag-and-drop loading, long-edge limiting, optional upscale, and maximum-area centered cropping for common landscape/portrait ratios |
@@ -84,6 +85,10 @@ Sparse attention is not guaranteed to outperform CK at every resolution, duratio
 Chinese ComfyUI environments display Chinese node and control labels; other locales display English. Attention backend IDs remain unchanged.
 
 Connected media inputs show their prompt tags: `<Picture N>`, `<Video N>`, and `<Audio N>`; driving audio uses `<Audio D>`.
+
+Place the complete DMD8 stage under `ComfyUI/models/vdn/<model folder>` and connect VDN between the H3 model loader and the Star7 chunk node. The INT8 ConvRot stage is recommended. Use an H3 base without Turbo or other LoRAs already fused in; VDN applies its own trained adapters. The chunk node preserves VDN attention automatically.
+
+Reference-image limits accept `0` to preserve source size, `0 < value <= 10` as a downscale-only megapixel cap, and larger values as a pixel long-edge cap. Cropping precedes resizing. Preview decoders are selectable, existing workflow values are restored automatically, and tiled HD logs report each tile prediction.
 
 ### H3 One-click Face Repair
 
