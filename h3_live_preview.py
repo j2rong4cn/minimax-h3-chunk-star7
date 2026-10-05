@@ -7,12 +7,14 @@ import threading
 import time
 import urllib.request
 from contextlib import contextmanager
+from collections import deque
 
 from aiohttp import web
 import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from comfy.taesd.taehv import MemBlock, TGrow
 import comfy.model_management
 import comfy.nested_tensor
 import comfy.patcher_extension
@@ -345,9 +347,11 @@ def extract_video_latent(x0, latent_shapes):
 
 
 class LatestPreviewWorker:
-    def __init__(self, node_id, run_id):
+    def __init__(self, node_id, run_id, quality=76, fps=6):
         self.node_id = node_id
         self.run_id = run_id
+        self.quality = int(quality)
+        self.fps = int(fps)
         self._condition = threading.Condition()
         self._pending = None
         self._closed = False
@@ -402,9 +406,9 @@ class LatestPreviewWorker:
             format="WEBP",
             save_all=True,
             append_images=images[1:],
-            duration=167,
+            duration=round(1000 / self.fps),
             loop=0,
-            quality=76,
+            quality=self.quality,
             method=1,
         )
         payload = {
@@ -414,6 +418,7 @@ class LatestPreviewWorker:
             "total": total_steps,
             "width": images[0].width,
             "height": images[0].height,
+            "fps": self.fps,
             "image": base64.b64encode(buffer.getvalue()).decode("ascii"),
         }
         _remember_preview_payload(payload)
@@ -467,7 +472,7 @@ def load_taeh3(preview_model=TAEH3_FILENAME):
                 )
                 continue
             state_dict = comfy.utils.load_torch_file(path, safe_load=True)
-            vae = comfy.sd.VAE(sd=state_dict)
+            vae = comfy.sd.VAE(sd=state_dict, dtype=torch.float16 if comfy.model_management.vae_device().type == "cuda" else None)
             vae.throw_exception_if_invalid()
             if vae.latent_channels != 24 or vae.first_stage_model.__class__.__name__ != "TAEHV":
                 raise TAEH3CoreUnsupported(
@@ -513,67 +518,85 @@ def load_taeh3_or_start_download(preview_model=TAEH3_FILENAME):
         return None, "Downloading taeh3.safetensors in the background"
 
 
-def decode_preview(vae, video, frame_count, resolution):
-    indices = temporal_indices(video.shape[2], frame_count)
-    index = torch.tensor(indices, device=video.device, dtype=torch.long)
+def preview_frame_indices(latent_count, fps):
+    total = 1 if latent_count == 1 else ((latent_count + 4) // 5) * 17 - 12
+    count = min(total, max(1, round(total * fps / 24)))
+    frames = [min(total - 1, round(i * 24 / fps)) for i in range(count)]
+    # H3 trims three frames per 20-frame chunk and twelve tail frames.
+    raw = [frame // 17 * 20 + frame % 17 + 3 for frame in frames]
+    return frames, raw
 
-    # index_select makes an independent allocation. The sampler-owned x0 and audio stream
-    # remain untouched even though the TAE decoder uses in-place activations internally.
-    selected = video[:1].index_select(2, index).clone()
-    height, width = preview_latent_size(selected.shape[-2], selected.shape[-1], resolution)
-    frames = selected.movedim(2, 1).reshape(len(indices), 24, selected.shape[-2], selected.shape[-1])
-    if frames.shape[-2:] != (height, width):
-        frames = F.interpolate(frames, size=(height, width), mode="bilinear", align_corners=False)
-    frames = frames.unsqueeze(2).contiguous()
 
-    # Decode one sampled instant at a time.  TAEH3 is tiny, while batching all
-    # 25 previews can temporarily reserve enough activation memory to evict a
-    # portion of the actively sampling H3 model on tighter cards.
-    decode_shape = (1,) + tuple(frames.shape[1:])
+def decode_preview_frames(model, sample, raw_indices, output_device):
+    # Every temporal MemBlock still sees all preceding frames. Only the stateless
+    # RGB tail skips unwanted frames, before its spatial upsample/convolutions.
+    decoder = model.decoder
+    cutoff = max(i for i, block in enumerate(decoder) if isinstance(block, MemBlock)) + 1
+    tail_scale = 1
+    for block in decoder[cutoff:]:
+        if isinstance(block, TGrow):
+            tail_scale *= block.stride
+    wanted = set(raw_indices)
+    work = deque((x.squeeze(1), 0, None) for x in model.process_in(sample).movedim(2, 1).split(1, dim=1))
+    memory = [None] * len(decoder)
+    outputs = {}
+    tail_index = 0
+    while work:
+        x, index, raw = work.popleft()
+        if index == cutoff:
+            raw = tail_index * tail_scale
+            tail_index += 1
+            if not any(i in wanted for i in range(raw, raw + tail_scale)):
+                continue
+        if index == len(decoder):
+            if raw in wanted:
+                outputs[raw] = F.pixel_shuffle(x, model.patch_size)[0].to(output_device)
+            continue
+        block = decoder[index]
+        if isinstance(block, MemBlock):
+            past = memory[index]
+            y = block(x, x * 0 if past is None else past)
+            memory[index] = x.detach().clone()
+            work.appendleft((y, index + 1, raw))
+        elif isinstance(block, TGrow):
+            y = block(x)
+            for offset, child in reversed(list(enumerate(y.split(1, dim=0)))):
+                child_raw = None if raw is None else raw + offset
+                if child_raw is None or child_raw in wanted:
+                    work.appendleft((child, index + 1, child_raw))
+        else:
+            work.appendleft((block(x), index + 1, raw))
+    return torch.stack([outputs[index] for index in raw_indices]).clamp_(0, 1)
+
+
+def decode_preview(vae, video, fps, resolution):
+    _, raw_indices = preview_frame_indices(video.shape[2], fps)
+    selected = video[:1].clone()
+    decode_shape = (1, selected.shape[1], 1, selected.shape[3], selected.shape[4])
     memory_required = vae.memory_used_decode(decode_shape, vae.vae_dtype)
     loaded = comfy.model_management.loaded_models(only_currently_used=True)
     loaded.append(vae.patcher)
-    # These expected per-step residency messages are preview housekeeping, not
-    # new sampling events. Keep warnings/errors visible while leaving the four
-    # Star7 sampling-speed summaries adjacent in the normal INFO log.
     with _quiet_preview_model_loading():
         comfy.model_management.load_models_gpu(loaded, memory_required=memory_required)
-
-    # Do not call VAE.decode() here.  Its public path performs another
-    # load_models_gpu([vae]) call which can offload the actively sampling H3
-    # model; the next diffusion step then has to reload many gigabytes.  The
-    # model was prepared above together with all currently-used models, so a
-    # direct TAEH3 decode preserves H3 residency and removes that per-step
-    # unload/reload penalty.
     with comfy.model_management.cuda_device_context(vae.device):
-        decoded = []
-        for frame in frames.split(1, dim=0):
-            sample = frame.to(device=vae.device, dtype=vae.vae_dtype)
-            rgb_frame = vae.first_stage_model.decode(sample)
-            rgb_frame = vae.process_output(rgb_frame)
-            decoded.append(
-                rgb_frame.to(
-                    device=vae.output_device,
-                    dtype=vae.vae_output_dtype(),
-                    copy=True,
-                )
-            )
-        rgb = torch.cat(decoded, dim=0)
-    rgb = rgb.movedim(1, -1)
-    if rgb.ndim == 5:
-        rgb = rgb[:, rgb.shape[1] // 2]
-    if rgb.ndim != 4 or rgb.shape[-1] != 3:
-        raise ValueError(f"TAEH3 returned unexpected shape {tuple(rgb.shape)}")
-    return rgb.detach().float().clamp(0, 1).mul(255).to(torch.uint8).cpu().numpy()
+        sample = selected.to(device=vae.device, dtype=vae.vae_dtype)
+        rgb = decode_preview_frames(vae.first_stage_model, sample, raw_indices, vae.output_device)
+        height, width = rgb.shape[-2:]
+        if max(height, width) > int(resolution):
+            scale = int(resolution) / max(height, width)
+            rgb = F.interpolate(rgb.float(), size=(max(1, round(height * scale)), max(1, round(width * scale))),
+                                mode="bilinear", align_corners=False, antialias=True)
+    return rgb.movedim(1, -1).detach().float().clamp(0, 1).mul(255).to(torch.uint8).cpu().numpy()
 
 
 class H3LivePreviewWrapper:
-    def __init__(self, preview_frames, preview_resolution, first_step_only, node_id, preview_model=TAEH3_FILENAME):
-        self.preview_frames = int(preview_frames)
+    def __init__(self, preview_fps, preview_resolution, first_step_only, node_id, preview_model=TAEH3_FILENAME, preview_quality=76):
+        self.preview_fps = int(preview_fps)
         self.preview_resolution = int(preview_resolution)
         self.first_step_only = bool(first_step_only)
         self.node_id = str(node_id) if node_id is not None else None
         self.preview_model = preview_model
+        self.preview_quality = int(preview_quality)
 
     def __call__(self, executor, noise, latent_image, sampler, sigmas, denoise_mask, callback, disable_pbar, seed, latent_shapes=None):
         run_id = str(time.monotonic_ns())
@@ -587,7 +610,7 @@ class H3LivePreviewWrapper:
         try:
             if PromptServer is None:
                 raise RuntimeError("ComfyUI PromptServer is unavailable")
-            worker = LatestPreviewWorker(self.node_id, run_id)
+            worker = LatestPreviewWorker(self.node_id, run_id, self.preview_quality, self.preview_fps)
             vae, pending_message = load_taeh3_or_start_download(self.preview_model)
             send_status(
                 self.node_id,
@@ -630,7 +653,7 @@ class H3LivePreviewWrapper:
                         return
                     send_status(self.node_id, run_id, "start", total=total_steps)
                 video = extract_video_latent(x0, latent_shapes)
-                frames = decode_preview(vae, video, self.preview_frames, self.preview_resolution)
+                frames = decode_preview(vae, video, self.preview_fps, self.preview_resolution)
                 worker.submit(frames, step + 1, total_steps)
                 preview_sent = True
             except Exception as error:
@@ -666,18 +689,20 @@ class MiniMaxH3LivePreviewStar7:
         return {
             "required": {
                 "model": ("MODEL",),
-                "preview_frames": ("INT", {"default": 25, "min": 4, "max": 64, "step": 1}),
-                "preview_resolution": (["256", "384", "512"], {"default": "512"}),
+                "preview_resolution": (["256", "384", "512", "768", "1024"], {"default": "512"}),
                 "first_step_only": ("BOOLEAN", {"default": False}),
                 # Append new serialized widgets after the original v1 fields.
                 # The frontend presents a non-serialized mirror at the top.
                 "preview_enabled": ("BOOLEAN", {"default": True}),
             },
             "optional": {
+                "preview_fps": ("INT", {"default": 5, "min": 1, "max": 24, "step": 1, "tooltip": "Preview frames per second over the full timeline. Unselected RGB tails are skipped; temporal memory still updates continuously."}),
+
                 "preview_model": (_preview_model_choices(), {
                     "default": TAEH3_FILENAME,
                     "tooltip": "H3 TAEHV preview decoder in models/vae_approx. The recommended taeh3.safetensors remains listed before download.",
                 }),
+                "preview_quality": ("INT", {"default": 80, "min": 1, "max": 100, "step": 1, "tooltip": "Animated WebP compression quality. Higher values preserve more detail and increase transfer size."}),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -691,12 +716,13 @@ class MiniMaxH3LivePreviewStar7:
     def patch(
         self,
         model,
-        preview_frames,
-        preview_resolution,
+        preview_fps=5,
+        preview_resolution="512",
         first_step_only=False,
         preview_enabled=True,
         unique_id=None,
         preview_model=TAEH3_FILENAME,
+        preview_quality=76,
     ):
         # Disabled means truly absent: no model clone, sampler wrapper, decoder
         # loading, background download, callback or frontend transport.
@@ -704,19 +730,20 @@ class MiniMaxH3LivePreviewStar7:
             return (model,)
         # Some older frontend builds briefly serialize a fresh INT widget as zero.
         # Keep the backend default safe without changing valid saved workflows.
-        preview_frames = int(preview_frames)
-        if preview_frames < 4:
-            preview_frames = 25
+        preview_fps = int(preview_fps)
+        if preview_fps < 1 or preview_fps > 24:
+            preview_fps = 5
         patched = model.clone()
         patched.add_wrapper_with_key(
             comfy.patcher_extension.WrappersMP.OUTER_SAMPLE,
             "star7_h3_live_preview",
             H3LivePreviewWrapper(
-                preview_frames,
+                preview_fps,
                 preview_resolution,
                 first_step_only,
                 unique_id,
                 preview_model,
+                preview_quality,
             ),
         )
         return (patched,)

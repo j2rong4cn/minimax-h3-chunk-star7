@@ -2,7 +2,7 @@
 
 [中文](README.md) · [Benchmarks](BENCHMARKS.md) · [Example workflows](examples/workflows)
 
-The refreshed 0919 examples use first pass → optional HD → optional Face Repair → Star7 Chunked Decode. HD and Face Repair are disabled by default. Select installed model files; load your own reference media and unbypass those nodes if needed. Face repair requires chunk project 2.16.2 or newer.
+The 1006 bilingual examples include: first pass -> optional HD -> optional Face Repair -> Star7 Chunked Decode, with FPS-controlled live previews and VEDA bypassed by default. Select installed models and replace reference-media placeholders.
 
 Run high-quality, long-duration MiniMax H3 video generation on GPUs with limited VRAM. The core node combines independent QKV, RoPE, and MLP activation chunking with a selectable attention backend. It does not alter the sampler, sigma schedule, latent layout, VAE, duration, frame count, or output resolution.
 
@@ -211,8 +211,16 @@ These are observations from one local configuration, not cross-GPU performance g
 
 `MiniMax H3 Live Preview - Star7` has a top-level Show preview switch. Off returns the incoming MODEL unchanged and installs no sampling callback, decoder load/download, decode, encoding worker, or transport. When enabled, it decodes uniformly sampled temporal positions after each eligible H3 sampling step with `taeh3.safetensors`; the installed alias `taeh3_decoder.safetensors` is also accepted. Hovering over the preview reveals a compact timeline: dragging scrubs across the sampled positions, and releasing resumes looping from the selected frame. Returning from another browser tab redraws retained frames or recovers the latest WebP from the backend if the page slept through its websocket event. The animation still updates at each configured step, but repetitive model-residency and successful-encode INFO messages from preview housekeeping are suppressed; initial decoder detection, download state, and all warnings/errors remain visible so sampling-speed lines stay easy to compare. If neither decoder filename is present in `models/vae_approx`, the node races the HF mirror and the pinned madebyollin/taehv source first, then tries the remaining fallbacks, verifying SHA-256 without blocking sampling. Preview starts at the next sampling callback after the download completes. If it becomes ready only at the final callback and no earlier preview was shown, one final preview is emitted. Download or preview failure never stops the main generation.
 
-The default preview uses 25 uniformly distributed temporal positions at a 512-pixel long edge. `First step only` is disabled by default; when enabled, only Step 1 is decoded and all later preview work is skipped.
+The default preview uses 5 frames per second across the complete timeline at a 512-pixel long edge. `First step only` is disabled by default; when enabled, only Step 1 is decoded and all later preview work is skipped.
 
 ## License
 
 Star7 code is distributed under the [MIT License](LICENSE). Bundled NVIDIA Sol-Attn source is distributed under its [Apache 2.0 license and third-party notices](vendor/sol_attn/THIRD_PARTY_NOTICES.md). The H3 AdaLN curve grid and adaptation provenance are documented in the [Larryvrh H3 Turbo notice](vendor/LARRYVRH-H3-TURBO-NOTICE.md).
+
+## VEDA and live preview (2.18.0)
+
+VEDA has an enable switch and works with normal H3 sampling or Star7 chunked CK. Disable it to pass the model through without loading the predictor or installing its patch. SM75 uses the bundled Star7 CUDA INT8 QK / FP16 PV kernel; SM80+ uses upstream Triton. Do not combine VEDA with another sparse-attention backend. Predictor: `models/veda/minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors`. Diagnostics are logged instead of displayed in the node. Speed varies by workload.
+
+TAEH3 previews retain native latent resolution and continuous temporal state. FPS (1-24, default 5) selects frames before the final spatial/RGB decoder tail, transfer and encoding; temporal-state computation still runs. A 10-second video at 5 FPS shows about 50 frames. The 256/384/512/768/1024 long-edge cap is applied after RGB decoding. WebP quality (1-100) affects compression only. Neither setting changes final output resolution. Older workflows retain quality 76; new nodes default to 80.
+
+The bundled SM75 binary targets Windows x64 and the tested embedded Python/PyTorch runtime. Other builds require recompilation with `vendor/veda/kernels/native/build.py`. Third-party licenses and sources are included in `vendor/veda/LICENSE` and `vendor/veda/NOTICE.md`.

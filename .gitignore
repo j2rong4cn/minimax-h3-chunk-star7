@@ -17,3 +17,4 @@ create_workflow.py
 .triton-cache/
 bench/validation_frames/
 bench/workflow-sm75-fp16pv-validation.json
+vendor/veda/kernels/native/_build/

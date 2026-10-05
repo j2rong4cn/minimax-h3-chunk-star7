@@ -1,15 +1,15 @@
 {
-  "id": "02fbcb19-b836-4d20-9ad0-4153071938f4",
+  "id": "8a79276f-b4dc-4ab8-815f-ed402d89fb3c",
   "revision": 0,
-  "last_node_id": 395,
-  "last_link_id": 522,
+  "last_node_id": 412,
+  "last_link_id": 548,
   "nodes": [
     {
       "id": 341,
       "type": "MiniMaxH3ReferenceVideoLoadStar7",
       "pos": [
-        -2872.079802114664,
-        6469.04388281798
+        -2879.5002178552313,
+        6942.505095296829
       ],
       "size": [
         380.6489178789552,
@@ -47,7 +47,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "5870ad7fed2f53180d633c36d3e23448aafb93bd",
         "Node name for S&R": "MiniMaxH3ReferenceVideoLoadStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -56,7 +56,7 @@
         }
       },
       "widgets_values": [
-        "reference.mp4",
+        "reference-video.mp4",
         736,
         false,
         false,
@@ -65,7 +65,7 @@
         "image"
       ],
       "widgets_values_named": {
-        "video": "reference.mp4",
+        "video": "MiniMax H3 Star7_00149-audio.mp4",
         "max_long_edge": 736,
         "allow_upscale": false,
         "trim_enabled": false,
@@ -80,8 +80,8 @@
       "id": 354,
       "type": "MarkdownNote",
       "pos": [
-        -3210.7399240855852,
-        6395.638216185367
+        -3213.204675026673,
+        6871.085820620815
       ],
       "size": [
         274.3103547420527,
@@ -101,7 +101,7 @@
         }
       },
       "widgets_values": [
-        "限制参考视频最长边可以减少视觉编码耗时和显存压力；设为 0 保留原分辨率。分块可降低临时显存峰值，但高分辨率仍会增加资源需求。\n\n参考片段按模型条件要求选取 2–15 秒。载入自己的素材后再取消绕过。"
+        "通过限制视频的最长边来减少视频尺寸可以大幅度提高clip视觉编码速度与视频生成速度，并且降低显存消耗，酌情进行调整，但是由于qkv分块的存在不用过于担心爆显存，调大分辨率也没事。\n\n限制设为0时代表不缩小分辨率。\n\n裁切视频范围应按官方条件限制为最低两秒，最长15秒。"
       ],
       "widgets_values_named": {
         "text": "通过限制视频的最长边来减少视频尺寸可以大幅度提高clip视觉编码速度与视频生成速度，并且降低显存消耗，酌情进行调整，但是由于qkv分块的存在不用过于担心爆显存，调大分辨率也没事。\n\n限制设为0时代表不缩小分辨率。\n\n裁切视频范围应按官方条件限制为最低两秒，最长15秒。"
@@ -220,8 +220,8 @@
       "id": 365,
       "type": "MarkdownNote",
       "pos": [
-        -3207.018522080246,
-        6200.9748362670225
+        -3213.204675026673,
+        6671.085820620815
       ],
       "size": [
         271.12440658814774,
@@ -253,8 +253,8 @@
       "id": 351,
       "type": "MarkdownNote",
       "pos": [
-        -1066.4342048457966,
-        5373.475756819664
+        -1066.7209042489285,
+        5238.0121354223575
       ],
       "size": [
         396.9297126852117,
@@ -294,7 +294,7 @@
         58
       ],
       "flags": {},
-      "order": 38,
+      "order": 43,
       "mode": 0,
       "inputs": [
         {
@@ -306,7 +306,7 @@
       "outputs": [],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "5870ad7fed2f53180d633c36d3e23448aafb93bd",
         "Node name for S&R": "Star7VideoWorkflowExport",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -360,8 +360,8 @@
       "id": 361,
       "type": "MarkdownNote",
       "pos": [
-        -1064.8236180490794,
-        7169.69702176757
+        -1059.455051779409,
+        7430.308224893756
       ],
       "size": [
         410.0527210864451,
@@ -403,7 +403,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 36,
+      "order": 41,
       "mode": 0,
       "inputs": [
         {
@@ -451,7 +451,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "e0ac4cfa579dd7ddab9ffe9527155b96f40d6eca",
         "Node name for S&R": "MiniMaxH3ChunkedDecodeStar7",
         "ue_properties": {
           "version": "7.5.2",
@@ -482,7 +482,7 @@
           "name": "image",
           "type": "IMAGE",
           "links": [
-            452
+            525
           ]
         },
         {
@@ -493,7 +493,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "75d863dff6a7e15cbfa52f5b7d90ff1af153000d",
         "Node name for S&R": "MiniMaxH3LoadImageScaleStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -502,7 +502,7 @@
         }
       },
       "widgets_values": [
-        "reference.png",
+        "reference-326.png",
         1280,
         false,
         false,
@@ -510,7 +510,7 @@
         "image"
       ],
       "widgets_values_named": {
-        "image": "reference.png",
+        "image": "时崎狂三子-别装了，你明明也在看我🫵🏻-01.jpg",
         "最长边": 1280,
         "允许小图放大": false,
         "调整比例": false,
@@ -540,7 +540,7 @@
           "name": "image",
           "type": "IMAGE",
           "links": [
-            497
+            526
           ]
         },
         {
@@ -551,7 +551,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "75d863dff6a7e15cbfa52f5b7d90ff1af153000d",
         "Node name for S&R": "MiniMaxH3LoadImageScaleStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -560,7 +560,7 @@
         }
       },
       "widgets_values": [
-        "reference.png",
+        "reference-327.png",
         1280,
         false,
         false,
@@ -568,7 +568,7 @@
         "image"
       ],
       "widgets_values_named": {
-        "image": "reference.png",
+        "image": "予希同学AI-别乱输指令 人物出图差全在提示词-01.jpg",
         "最长边": 1280,
         "允许小图放大": false,
         "调整比例": false,
@@ -590,7 +590,7 @@
         106.93975081853569
       ],
       "flags": {},
-      "order": 29,
+      "order": 34,
       "mode": 0,
       "inputs": [
         {
@@ -598,27 +598,6 @@
           "name": "model",
           "type": "MODEL",
           "link": 471
-        },
-        {
-          "name": "scheduler",
-          "type": "COMBO",
-          "widget": {
-            "name": "scheduler"
-          }
-        },
-        {
-          "name": "steps",
-          "type": "INT",
-          "widget": {
-            "name": "steps"
-          }
-        },
-        {
-          "name": "denoise",
-          "type": "FLOAT",
-          "widget": {
-            "name": "denoise"
-          }
         }
       ],
       "outputs": [
@@ -656,15 +635,15 @@
       "id": 128,
       "type": "BasicGuider",
       "pos": [
-        -1069.6923165541407,
-        5955.8841699533095
+        -1064.2050678471767,
+        6210.879520151964
       ],
       "size": [
         405.90327018588414,
         58.24219602411267
       ],
       "flags": {},
-      "order": 32,
+      "order": 37,
       "mode": 0,
       "inputs": [
         {
@@ -710,10 +689,10 @@
       ],
       "size": [
         416.38840968798536,
-        636
+        696
       ],
       "flags": {},
-      "order": 30,
+      "order": 35,
       "mode": 0,
       "inputs": [
         {
@@ -751,44 +730,68 @@
           "label": "最终输出音频",
           "name": "final_audio",
           "shape": 7,
-          "type": "AUDIO"
+          "type": "AUDIO",
+          "link": null
         },
         {
           "label": "首帧",
           "name": "first_frame",
           "shape": 7,
-          "type": "IMAGE"
+          "type": "IMAGE",
+          "link": null
         },
         {
           "label": "尾帧",
           "name": "last_frame",
           "shape": 7,
-          "type": "IMAGE"
+          "type": "IMAGE",
+          "link": null
         },
         {
           "label": "参考图 1 - <Picture 1>",
           "name": "ref_images.ref_image_0",
           "shape": 7,
           "type": "IMAGE",
-          "link": 449
+          "link": 524
         },
         {
           "label": "参考图 2 - <Picture 2>",
           "name": "ref_images.ref_image_1",
           "shape": 7,
           "type": "IMAGE",
-          "link": 452
+          "link": 525
         },
         {
           "label": "参考图 3 - <Picture 3>",
           "name": "ref_images.ref_image_2",
           "shape": 7,
           "type": "IMAGE",
-          "link": 497
+          "link": 526
         },
         {
-          "label": "参考图 4",
+          "label": "参考图 4 - <Picture 4>",
           "name": "ref_images.ref_image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 533
+        },
+        {
+          "label": "参考图 5 - <Picture 5>",
+          "name": "ref_images.ref_image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 534
+        },
+        {
+          "label": "参考图 6 - <Picture 6>",
+          "name": "ref_images.ref_image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 535
+        },
+        {
+          "label": "参考图 7",
+          "name": "ref_images.ref_image_6",
           "shape": 7,
           "type": "IMAGE",
           "link": null
@@ -811,7 +814,8 @@
           "label": "参考视频 3",
           "name": "ref_video_2",
           "shape": 7,
-          "type": "IMAGE"
+          "type": "IMAGE",
+          "link": null
         },
         {
           "label": "参考视频音频 1 - <Audio 1>",
@@ -831,19 +835,22 @@
           "label": "参考视频音频 3",
           "name": "ref_video_audio_2",
           "shape": 7,
-          "type": "AUDIO"
+          "type": "AUDIO",
+          "link": null
         },
         {
           "label": "参考音频 1",
           "name": "ref_audio_0",
           "shape": 7,
-          "type": "AUDIO"
+          "type": "AUDIO",
+          "link": null
         },
         {
           "label": "参考音频 2",
           "name": "ref_audio_1",
           "shape": 7,
-          "type": "AUDIO"
+          "type": "AUDIO",
+          "link": null
         },
         {
           "label": "提示词",
@@ -852,7 +859,7 @@
           "widget": {
             "name": "prompt"
           },
-          "link": 474
+          "link": 548
         },
         {
           "label": "宽度",
@@ -896,7 +903,8 @@
           "type": "COMBO",
           "widget": {
             "name": "audio_mode"
-          }
+          },
+          "link": null
         },
         {
           "label": "重混强度（仅重混模式）",
@@ -913,7 +921,8 @@
           "type": "COMBO",
           "widget": {
             "name": "reference_quality"
-          }
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -965,7 +974,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "36c35edcc3704686dbb4535ea6b572be8c1519f5",
         "Node name for S&R": "MiniMaxH3MaterialPromptStar7",
         "ue_properties": {
           "version": "7.5.2",
@@ -1015,30 +1024,7 @@
       "flags": {},
       "order": 11,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "clip_name",
-          "type": "COMBO",
-          "widget": {
-            "name": "clip_name"
-          }
-        },
-        {
-          "name": "type",
-          "type": "COMBO",
-          "widget": {
-            "name": "type"
-          }
-        },
-        {
-          "name": "device",
-          "shape": 7,
-          "type": "COMBO",
-          "widget": {
-            "name": "device"
-          }
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
           "label": "CLIP",
@@ -1091,15 +1077,7 @@
       "flags": {},
       "order": 12,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "vae_name",
-          "type": "COMBO",
-          "widget": {
-            "name": "vae_name"
-          }
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
           "name": "VAE",
@@ -1148,15 +1126,7 @@
       "flags": {},
       "order": 13,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "vae_name",
-          "type": "COMBO",
-          "widget": {
-            "name": "vae_name"
-          }
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
           "name": "VAE",
@@ -1216,10 +1186,10 @@
         }
       },
       "widgets_values": [
-        "本示例使用本项目自带的 MiniMax H3 Enhanced Loader - Star7。SM75 使用受保护 FP16，SM80+ 显式使用 BF16，并纠正全局强制 FP16 设置。\n\n按本机实际文件选择模型、文本编码器、VAE 和 LoRA。\n\n项目：https://github.com/star7code/minimax-h3-chunk-star7"
+        "20系以及不支持bf16的需要启用该增强载入节点，优化内容可跳转github查看详情。新版架构显卡可以使用comfyui默认unet加载器加载模型。新版加载器已兼容新架构显卡，注意检查自己的启动器参数不要开启fp16，否则会产生溢出错误。其他修复节点也可能会导致不兼容的现象。\n\n完整工作流需要的模型链接：https://pan.quark.cn/s/27f28ba550dc\n\n缺失节点请在管理器中安装，便于下次更新：\n\nhttps://github.com/star7code/minimax-h3-chunk-star7.git"
       ],
       "widgets_values_named": {
-        "text": "20系以及不支持bf16的需要启用该增强载入节点，优化内容可跳转github查看详情。新版架构显卡可以使用comfyui默认unet加载器加载模型。新版加载器已兼容新架构显卡，注意检查自己的启动器参数不要开启fp16，否则会产生溢出错误。其他修复节点也可能会导致不兼容的现象。\n\n模型链接：https://pan.quark.cn/s/27f28ba550dc\n\n缺失节点请在管理器中安装，便于下次更新：\n\nhttps://github.com/star7code/minimax-h3-chunk-star7.git"
+        "text": "20系以及不支持bf16的需要启用该增强载入节点，优化内容可跳转github查看详情。新版架构显卡可以使用comfyui默认unet加载器加载模型。新版加载器已兼容新架构显卡，注意检查自己的启动器参数不要开启fp16，否则会产生溢出错误。其他修复节点也可能会导致不兼容的现象。\n\n完整工作流需要的模型链接：https://pan.quark.cn/s/27f28ba550dc\n\n缺失节点请在管理器中安装，便于下次更新：\n\nhttps://github.com/star7code/minimax-h3-chunk-star7.git"
       },
       "color": "#432",
       "bgcolor": "#653"
@@ -1233,12 +1203,12 @@
       ],
       "size": [
         665.3529014472883,
-        1501.8127631936368
+        1448.8961259983155
       ],
       "flags": {
         "collapsed": false
       },
-      "order": 37,
+      "order": 42,
       "mode": 0,
       "inputs": [
         {
@@ -1258,12 +1228,14 @@
           "label": "批次管理",
           "name": "meta_batch",
           "shape": 7,
-          "type": "VHS_BatchManager"
+          "type": "VHS_BatchManager",
+          "link": null
         },
         {
           "name": "vae",
           "shape": 7,
-          "type": "VAE"
+          "type": "VAE",
+          "link": null
         },
         {
           "label": "帧率",
@@ -1271,7 +1243,8 @@
           "type": "FLOAT",
           "widget": {
             "name": "frame_rate"
-          }
+          },
+          "link": null
         },
         {
           "label": "循环次数",
@@ -1279,7 +1252,8 @@
           "type": "INT",
           "widget": {
             "name": "loop_count"
-          }
+          },
+          "link": null
         },
         {
           "label": "文件名前缀",
@@ -1287,7 +1261,8 @@
           "type": "STRING",
           "widget": {
             "name": "filename_prefix"
-          }
+          },
+          "link": null
         },
         {
           "label": "格式",
@@ -1295,7 +1270,8 @@
           "type": "COMBO",
           "widget": {
             "name": "format"
-          }
+          },
+          "link": null
         },
         {
           "label": "Ping-Pong",
@@ -1303,7 +1279,8 @@
           "type": "BOOLEAN",
           "widget": {
             "name": "pingpong"
-          }
+          },
+          "link": null
         },
         {
           "label": "保存到输出文件夹",
@@ -1311,7 +1288,8 @@
           "type": "BOOLEAN",
           "widget": {
             "name": "save_output"
-          }
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -1356,7 +1334,20 @@
         "megabit": true,
         "save_metadata": true,
         "pingpong": false,
-        "save_output": true
+        "save_output": true,
+        "videopreview": {
+          "hidden": false,
+          "paused": false,
+          "params": {
+            "filename": "minimax-h3-star7_00001-audio.mp4",
+            "subfolder": "MiniMax-h3\\2026-10-06",
+            "type": "output",
+            "format": "video/nvenc_h264-mp4",
+            "frame_rate": 24,
+            "workflow": "minimax-h3-star7_00001.png",
+            "fullpath": "D:\\ComfyUI-aki-v1.7\\ComfyUI\\output\\MiniMax-h3\\2026-10-06\\minimax-h3-star7_00001-audio.mp4"
+          }
+        }
       }
     },
     {
@@ -1373,7 +1364,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 25,
+      "order": 29,
       "mode": 0,
       "inputs": [
         {
@@ -1385,7 +1376,8 @@
         {
           "name": "values.b",
           "shape": 7,
-          "type": "FLOAT,INT,BOOLEAN"
+          "type": "FLOAT,INT,BOOLEAN",
+          "link": null
         },
         {
           "label": "expression",
@@ -1393,7 +1385,8 @@
           "type": "STRING",
           "widget": {
             "name": "expression"
-          }
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -1439,8 +1432,8 @@
       "id": 360,
       "type": "MiniMaxH3LivePreviewStar7",
       "pos": [
-        -1065.8332995799267,
-        6457.499584403852
+        -1060.3460508729627,
+        6712.494934602507
       ],
       "size": [
         410.75208876169324,
@@ -1449,7 +1442,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 31,
+      "order": 36,
       "mode": 0,
       "inputs": [
         {
@@ -1457,20 +1450,6 @@
           "name": "model",
           "type": "MODEL",
           "link": 481
-        },
-        {
-          "name": "preview_frames",
-          "type": "INT",
-          "widget": {
-            "name": "preview_frames"
-          }
-        },
-        {
-          "name": "preview_resolution",
-          "type": "COMBO",
-          "widget": {
-            "name": "preview_resolution"
-          }
         }
       ],
       "outputs": [
@@ -1495,20 +1474,20 @@
         }
       },
       "widgets_values": [
-        true,
-        25,
-        "512",
+        5,
+        "1024",
         false,
         true,
-        ""
+        "taeh3.safetensors",
+        80
       ],
       "widgets_values_named": {
-        "__star7_preview_enabled_ui": true,
-        "preview_frames": 25,
-        "preview_resolution": "512",
+        "preview_fps": 5,
+        "preview_resolution": "1024",
         "first_step_only": false,
         "preview_enabled": true,
-        "preview": ""
+        "preview_model": "taeh3.safetensors",
+        "preview_quality": 80
       },
       "color": "#223",
       "bgcolor": "#335"
@@ -1534,7 +1513,8 @@
           "type": "FLOAT",
           "widget": {
             "name": "value"
-          }
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -1579,15 +1559,7 @@
       "flags": {},
       "order": 16,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "noise_seed",
-          "type": "INT",
-          "widget": {
-            "name": "noise_seed"
-          }
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
           "label": "噪波生成",
@@ -1609,11 +1581,11 @@
         }
       },
       "widgets_values": [
-        861844810588730,
+        564739324325560,
         "randomize"
       ],
       "widgets_values_named": {
-        "noise_seed": 861844810588730,
+        "noise_seed": 564739324325560,
         "control_after_generate": "randomize"
       }
     },
@@ -1621,8 +1593,8 @@
       "id": 342,
       "type": "MiniMaxH3ReferenceVideoLoadStar7",
       "pos": [
-        -2450.2849820401566,
-        6465.822889649641
+        -2457.705397780724,
+        6939.284102128489
       ],
       "size": [
         402.7538139032181,
@@ -1660,7 +1632,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "5870ad7fed2f53180d633c36d3e23448aafb93bd",
         "Node name for S&R": "MiniMaxH3ReferenceVideoLoadStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -1669,7 +1641,7 @@
         }
       },
       "widgets_values": [
-        "reference.mp4",
+        "reference-video.mp4",
         736,
         false,
         false,
@@ -1678,7 +1650,7 @@
         "image"
       ],
       "widgets_values_named": {
-        "video": "reference.mp4",
+        "video": "MiniMax H3 Star7_00149-audio.mp4",
         "max_long_edge": 736,
         "allow_upscale": false,
         "trim_enabled": false,
@@ -1693,15 +1665,15 @@
       "id": 127,
       "type": "SamplerCustomAdvanced",
       "pos": [
-        -1059.6480095436443,
-        6067.621389874256
+        -1054.1607608366803,
+        6322.616740072911
       ],
       "size": [
         398.08809652245816,
         338
       ],
       "flags": {},
-      "order": 33,
+      "order": 38,
       "mode": 0,
       "inputs": [
         {
@@ -1760,9 +1732,7 @@
           "widget_ue_connectable": {},
           "input_ue_unconnectable": {}
         }
-      },
-      "widgets_values": [],
-      "widgets_values_named": {}
+      }
     },
     {
       "id": 325,
@@ -1772,7 +1742,7 @@
         5895.175763881026
       ],
       "size": [
-        264.352969297654,
+        255.48661874521258,
         422
       ],
       "flags": {
@@ -1786,7 +1756,7 @@
           "name": "image",
           "type": "IMAGE",
           "links": [
-            449
+            524
           ]
         },
         {
@@ -1797,7 +1767,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "75d863dff6a7e15cbfa52f5b7d90ff1af153000d",
         "Node name for S&R": "MiniMaxH3LoadImageScaleStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -1806,7 +1776,7 @@
         }
       },
       "widgets_values": [
-        "reference.png",
+        "reference-325.png",
         1280,
         false,
         false,
@@ -1814,7 +1784,7 @@
         "image"
       ],
       "widgets_values_named": {
-        "image": "reference.png",
+        "image": "面包好吃🥖_2_umi_来自小红书网页版.jpg",
         "最长边": 1280,
         "允许小图放大": false,
         "调整比例": false,
@@ -1836,7 +1806,7 @@
         83.75463282013789
       ],
       "flags": {},
-      "order": 27,
+      "order": 31,
       "mode": 0,
       "inputs": [
         {
@@ -1850,7 +1820,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            504
+            547
           ]
         }
       ],
@@ -1912,8 +1882,8 @@
       "id": 394,
       "type": "MarkdownNote",
       "pos": [
-        -1512.537886070807,
-        7727.856158104219
+        -1516.3389645149277,
+        7802.6125104782295
       ],
       "size": [
         406.65837872289933,
@@ -1933,7 +1903,7 @@
         }
       },
       "widgets_values": [
-        "连接顺序：一采 → 可选高清二采 → 可选人脸修复 → Star7 分块解码 → 保存。二采与修脸默认关闭，可单独或同时启用；同时启用会增加耗时。\n\n检测模型 face_yolov8m.pt 放在 ComfyUI/models/ultralytics/bbox。修脸结果由 Star7 分块解码在 RGB 图像中贴回，普通潜空间解码器不会应用修脸数据。\n\n远景小脸预设：0.48 / 768 / 2.4 / 0.95 / 羽化 18。超大脸裁剪边缘会自动渐隐，无需为此增大羽化值。保持修复清晰度可能将输出提升至约 1MP，已有更大分辨率不会缩小。"
+        "二采节点和人脸修复节点可以串联，最好进行二选一，同时开启耗时很长。\n\n使用该修复人脸节点需要下载face_yolov8m.pt模型\n\n放置于ComfyUI/models/ultralytics/bbox文件夹内"
       ],
       "widgets_values_named": {
         "text": "二采节点和人脸修复节点可以串联，最好进行二选一，同时开启耗时很长。\n\n使用该修复人脸节点需要下载face_yolov8m.pt模型\n\n放置于ComfyUI/models/ultralytics/bbox文件夹内"
@@ -1953,7 +1923,7 @@
         84.19621420775911
       ],
       "flags": {},
-      "order": 26,
+      "order": 30,
       "mode": 0,
       "inputs": [
         {
@@ -2018,7 +1988,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "7da38d5087d7b2eb0b586f7887c7c8a810829bea",
         "Node name for S&R": "MiniMaxH3ChunkEnhancedLoaderStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -2039,15 +2009,15 @@
       "id": 363,
       "type": "MiniMaxH3ActivationChunkStar7",
       "pos": [
-        -1072.2974041424857,
-        5608.08495217717
+        -1072.5209800744274,
+        5856.806637759807
       ],
       "size": [
         413.78268769986244,
         299.7134734381425
       ],
       "flags": {},
-      "order": 28,
+      "order": 33,
       "mode": 0,
       "inputs": [
         {
@@ -2068,7 +2038,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "ec35fe2a344bd5e66dc545000a64d33a9087ff10",
         "Node name for S&R": "MiniMaxH3ActivationChunkStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -2105,8 +2075,8 @@
       "id": 379,
       "type": "MarkdownNote",
       "pos": [
-        -1959.511386389331,
-        7728.048735598184
+        -1963.3124648334517,
+        7802.805087972195
       ],
       "size": [
         408.32738685525794,
@@ -2126,7 +2096,7 @@
         }
       },
       "widgets_values": [
-        "高清二采需要 minimax_h3_latent_upscaler_3d_fp16.safetensors，放在 models/latent_upscale_models。\n\n根据显存选择分格数量，例如 4MP 可尝试四格或六格。重叠区也会占用显存，分格不保证任意参数都不溢出。\n\n支持自动下载，网络失败时可手动安装。二采默认关闭；需要时启用，并保持在修脸之前。"
+        "使用该二采节点需要下载minimax_h3_latent_upscaler_3d_fp16.safetensors模型放置models\\latent_upscale_models文件夹内\n\n按照自己机器的性能尽量将每格的像素压在1.0以内，例如4.0使用四格甚至六格，原理是逐块生成最后拼接为高画质视频\n\n已内置运行自动下载，但是可能会失败，手动下载放置更稳妥。\n"
       ],
       "widgets_values_named": {
         "text": "使用该二采节点需要下载minimax_h3_latent_upscaler_3d_fp16.safetensors模型放置models\\latent_upscale_models文件夹内\n\n按照自己机器的性能尽量将每格的像素压在1.0以内，例如4.0使用四格甚至六格，原理是逐块生成最后拼接为高画质视频\n\n已内置运行自动下载，但是可能会失败，手动下载放置更稳妥。\n"
@@ -2142,8 +2112,8 @@
         6159.563640472011
       ],
       "size": [
-        416.4891225478027,
-        736.0895643452905
+        413.9549310486734,
+        798.1753768327999
       ],
       "flags": {},
       "order": 23,
@@ -2154,13 +2124,13 @@
           "name": "prompt",
           "type": "STRING",
           "links": [
-            474
+            548
           ]
         }
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "57f64db99d1b9c6f63a99b056a665ef9498a6ae1",
         "Node name for S&R": "MiniMaxH3PromptImportStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -2169,11 +2139,11 @@
         }
       },
       "widgets_values": [
-        "integrated_multimodal_description:\r\n\r\n[Shot 1]\r\nLive-action, photorealistic youth comedy, bright daytime on a clean outdoor sidewalk. Natural sunlight, simple urban background, relaxed everyday atmosphere, no complicated props.\r\n\r\nA young man stands casually on the sidewalk. A young woman notices his loose shoelaces, steps in front of him, and crouches down near his shoes.\r\n\r\nThe camera looks slightly downward in a close medium shot, clearly showing the woman crouching and the man's lower body.\r\n\r\nShe looks up at him with a sweet, helpful smile, lightly gestures toward his shoes, and says softly (S1):\r\n\r\n<d>[Chinese] 鞋带散了，我帮你系上。</d>\r\n\r\nThe man glances down briefly and accepts her help without suspicion.\r\n\r\nHer expression remains innocent and friendly, but a subtle playful look flashes across her face as she lowers her eyes toward the shoes.\r\n\r\n[Shot 2] At 00:03.000, the camera cuts to a tight close-up of the man's shoes and the woman's hands.\r\n\r\nInstead of simply tying each shoe normally, the woman quickly and secretly takes the loose lace ends from the man's left shoe and right shoe and ties them together into one secure knot between his feet.\r\n\r\nHer hand movements are quick, smooth, and practiced.\r\n\r\nThe knot is visually clear: the two shoes are now physically tethered together by their shoelaces.\r\n\r\nThe man remains standing naturally above frame and does not notice what she has done.\r\n\r\nThe woman gives the knot one final small tightening pull, then immediately releases it.\r\n\r\n[Shot 3] At 00:07.000, the camera cuts to a wider handheld tracking shot.\r\n\r\nThe woman suddenly rises, turns around, and quickly runs away down the sidewalk with playful energy.\r\n\r\nThe camera follows her movement for a brief moment, then keeps both characters readable in the composition.\r\n\r\nThe man reacts a beat late and tries to take his first normal step forward.\r\n\r\nBecause his two shoes are tied together, his feet cannot separate normally.\r\n\r\nHe instantly stumbles forward in surprise, throws his arms out to regain balance, and almost falls but manages to catch himself.\r\n\r\nHe looks down at his tied shoes, then toward the fleeing woman with a completely confused expression and blurts out (S2):\r\n\r\n<d>[Chinese] 哎？！</d>\r\n\r\nThe woman continues running away, clearly amused by the successful prank.\r\n\r\nEnd on the man's baffled reaction while she gets farther away in the background.\r\n\r\noverall_soundscape:\r\n\r\nBright outdoor daytime ambience with light distant traffic, subtle wind, and soft pedestrian sounds. Gentle footsteps at the beginning. During the shoelace close-up, emphasize small realistic fabric and lace friction sounds. In the final shot, the woman's quick footsteps become faster and gradually more distant, followed by the man's sudden shoe scuff and brief stumbling sound.\r\n\r\nnon_diegetic_music:\r\n\r\nLight playful youth-comedy music with a subtle mischievous rhythm. Keep it soft during the setup. At 00:07.000, when the woman suddenly runs away and the man stumbles, the music rises into a short playful comedic accent, then ends lightly on his confused reaction.",
+        "subject_definitions:\n<Subject 1> is the adult woman, the first uploaded character sheet. Use the unobscured facial close-up to preserve her facial identity. Retain her long wavy black hair, hoop earrings, black halter-neck backless gown with a thigh-high slit, black fingerless gloves, waist-mounted identification badge, and black pointed heels. Her fighting performance emphasizes evasive footwork, compact counters, and leverage.\n<Subject 2> is the adult female cyborg, the second uploaded character sheet. Use the unobscured facial close-up to preserve her facial identity. Retain her dark partially tied-back hair, fine facial mechanical seams, white and orange-gold armor, exposed dark mechanical joints, and metallic ear assemblies. Extend the established armor design consistently to the unseen lower body. Her fighting performance emphasizes powerful punches, knee strikes, and committed kicks.\n\nsummary:\n[reference generation] An exactly ten-second photorealistic sewer fight between <Subject 1> and <Subject 2>, filmed as one continuous moving shot. Varied choreography progresses through a punching combination, elbow counter, knee strike, low sweep, spinning kick, wrist control, and a leverage-based takedown with a recovery roll. Fast push-ins and pullbacks follow the changing fighting distance, with one brief bullet-time orbit during a narrowly avoided kick. Reference images define character appearance only.\n\nretention_analysis:\n<Subject 1> (appears throughout [Shot 1]): fully_preserved - preserve the referenced face, hair, gown, gloves, earrings, badge, and shoes. Her new combat movements do not alter her identity or costume design.\n<Subject 2> (appears throughout [Shot 1]): fully_preserved - preserve the referenced face, hair, facial mechanical details, armor construction, color distribution, and ear assemblies. Lower-body armor is a coherent extension of the visible design.\nExclude reference-sheet typography, gray face-obscuring squares, borders, duplicated views, and studio backgrounds. Neither picture is a first-frame or composition anchor.\n\ndetailed_description:\nPhotorealistic cinematic action, 16:9, exactly ten seconds, one uninterrupted take. Choreography is fast, varied, and causally connected: each defense creates the next attack. Every strike has a readable trajectory and reaction, with grounded balance rather than weightless acrobatics.\n\n[Shot 1] Inside a dim concrete sewer, <Subject 1> starts left foreground in her black slit gown and gloves; <Subject 2> faces her right midground in white-and-orange armor. Their referenced faces remain distinct. Shallow water covers rough concrete footing. Corroded pipes line the walls; cyan maintenance lights and a weak amber backlight reveal faces, limbs, and reflections without brightening the tunnel excessively.\n\nDuring 00:00.000–00:01.600, the camera rapidly pushes from a medium-wide view into a waist-up two-shot. <Subject 2> advances with a left jab followed immediately by a right cross. <Subject 1> parries the jab, slips outside the cross, and answers with a short right elbow toward the shoulder. <Subject 2> turns her armored upper arm into the elbow. Sharp glove movement, a metallic knock, and quick splashes punctuate the combination.\n\nDuring 00:01.600–00:03.000, <Subject 2> converts the close contact into a driving right knee toward the abdomen. <Subject 1> braces both forearms against the rising thigh, pivots off its line, and releases immediately. As the knee lowers, she drops her center of gravity and sends a low right-leg sweep toward the supporting ankle. The camera curves laterally and pulls back to reveal both fighters’ feet. <Subject 2> makes a compact hop over the sweep and lands with a broad splash.\n\nDuring 00:03.000–00:04.300, <Subject 1> retracts her sweeping leg and rises. <Subject 2> uses the landing to initiate a turning right back kick toward her upper torso, looking over her shoulder before extending. The camera tracks the rotation from outside the kick’s path, keeping attacker, target, and planted foot visible. <Subject 1> bends her knees and shifts diagonally backward, narrowly clearing the armored heel.\n\nDuring 00:04.300–00:05.400, the heel passes just in front of <Subject 1>’s shoulder. Ramp into extreme slow motion for this single near miss. The camera smoothly orbits sixty degrees with a slight push-in, revealing the gap between armor and black fabric through genuine spatial parallax. The kicking leg continues extending gradually; hair, skirt folds, and airborne droplets drift rather than freeze. Stretched water noise and a subdued mechanical whine replace the sharp impacts.\n\nDuring 00:05.400–00:07.500, snap back to full speed. <Subject 2> retracts the kick, plants her foot, and turns back with a reaching left punch. <Subject 1> redirects the wrist, captures that forearm with both hands, and steps outside the attacking arm. <Subject 2> bends her elbow and drives forward to break the control. The camera follows laterally, widening to preserve their hands, hips, and footing.\n\nDuring 00:07.500–00:10.000, <Subject 1> yields to that forward pressure, pivots beside <Subject 2>, and blocks her advancing ankle while drawing the captured arm diagonally down. Momentum carries <Subject 2> into a low sideways trip rather than an overhead lift. She lands on her armored side, immediately rolls through, and rises onto one knee facing her opponent. <Subject 1> releases before the fall and steps into guard. The camera dips with the takedown, then retreats into a clear two-person view as water slaps down. End with both ready to continue, without a pose hold or fade.\n\noverall_soundscape:\nLow flowing water, irregular drips, and short concrete-tunnel reverberation continue throughout. Synchronize distinct sounds to each technique: fast punch swishes, a hard elbow-on-armor knock, a muted knee interception, scraping water during the sweep, a heavy landing splash, mechanical rotation during the kick, glove friction during wrist control, and a deep armored impact during the trip. Brief exertion breaths, no dialogue. Stretch and attenuate sound only during 00:04.300–00:05.400; restore crisp combat transients immediately afterward.\n\nnon_diegetic_music:\nA restrained fast industrial percussion rhythm with low bass supports the fight without covering contact sounds. Percussion briefly drops out during the bullet-time interval, leaving a low sustained tone, then returns sharply with normal-speed action. No vocals.",
         ""
       ],
       "widgets_values_named": {
-        "prompt": "integrated_multimodal_description:\r\n\r\n[Shot 1]\r\nLive-action, photorealistic youth comedy, bright daytime on a clean outdoor sidewalk. Natural sunlight, simple urban background, relaxed everyday atmosphere, no complicated props.\r\n\r\nA young man stands casually on the sidewalk. A young woman notices his loose shoelaces, steps in front of him, and crouches down near his shoes.\r\n\r\nThe camera looks slightly downward in a close medium shot, clearly showing the woman crouching and the man's lower body.\r\n\r\nShe looks up at him with a sweet, helpful smile, lightly gestures toward his shoes, and says softly (S1):\r\n\r\n<d>[Chinese] 鞋带散了，我帮你系上。</d>\r\n\r\nThe man glances down briefly and accepts her help without suspicion.\r\n\r\nHer expression remains innocent and friendly, but a subtle playful look flashes across her face as she lowers her eyes toward the shoes.\r\n\r\n[Shot 2] At 00:03.000, the camera cuts to a tight close-up of the man's shoes and the woman's hands.\r\n\r\nInstead of simply tying each shoe normally, the woman quickly and secretly takes the loose lace ends from the man's left shoe and right shoe and ties them together into one secure knot between his feet.\r\n\r\nHer hand movements are quick, smooth, and practiced.\r\n\r\nThe knot is visually clear: the two shoes are now physically tethered together by their shoelaces.\r\n\r\nThe man remains standing naturally above frame and does not notice what she has done.\r\n\r\nThe woman gives the knot one final small tightening pull, then immediately releases it.\r\n\r\n[Shot 3] At 00:07.000, the camera cuts to a wider handheld tracking shot.\r\n\r\nThe woman suddenly rises, turns around, and quickly runs away down the sidewalk with playful energy.\r\n\r\nThe camera follows her movement for a brief moment, then keeps both characters readable in the composition.\r\n\r\nThe man reacts a beat late and tries to take his first normal step forward.\r\n\r\nBecause his two shoes are tied together, his feet cannot separate normally.\r\n\r\nHe instantly stumbles forward in surprise, throws his arms out to regain balance, and almost falls but manages to catch himself.\r\n\r\nHe looks down at his tied shoes, then toward the fleeing woman with a completely confused expression and blurts out (S2):\r\n\r\n<d>[Chinese] 哎？！</d>\r\n\r\nThe woman continues running away, clearly amused by the successful prank.\r\n\r\nEnd on the man's baffled reaction while she gets farther away in the background.\r\n\r\noverall_soundscape:\r\n\r\nBright outdoor daytime ambience with light distant traffic, subtle wind, and soft pedestrian sounds. Gentle footsteps at the beginning. During the shoelace close-up, emphasize small realistic fabric and lace friction sounds. In the final shot, the woman's quick footsteps become faster and gradually more distant, followed by the man's sudden shoe scuff and brief stumbling sound.\r\n\r\nnon_diegetic_music:\r\n\r\nLight playful youth-comedy music with a subtle mischievous rhythm. Keep it soft during the setup. At 00:07.000, when the woman suddenly runs away and the man stumbles, the music rises into a short playful comedic accent, then ends lightly on his confused reaction.",
+        "prompt": "subject_definitions:\n<Subject 1> is the adult woman, the first uploaded character sheet. Use the unobscured facial close-up to preserve her facial identity. Retain her long wavy black hair, hoop earrings, black halter-neck backless gown with a thigh-high slit, black fingerless gloves, waist-mounted identification badge, and black pointed heels. Her fighting performance emphasizes evasive footwork, compact counters, and leverage.\n<Subject 2> is the adult female cyborg, the second uploaded character sheet. Use the unobscured facial close-up to preserve her facial identity. Retain her dark partially tied-back hair, fine facial mechanical seams, white and orange-gold armor, exposed dark mechanical joints, and metallic ear assemblies. Extend the established armor design consistently to the unseen lower body. Her fighting performance emphasizes powerful punches, knee strikes, and committed kicks.\n\nsummary:\n[reference generation] An exactly ten-second photorealistic sewer fight between <Subject 1> and <Subject 2>, filmed as one continuous moving shot. Varied choreography progresses through a punching combination, elbow counter, knee strike, low sweep, spinning kick, wrist control, and a leverage-based takedown with a recovery roll. Fast push-ins and pullbacks follow the changing fighting distance, with one brief bullet-time orbit during a narrowly avoided kick. Reference images define character appearance only.\n\nretention_analysis:\n<Subject 1> (appears throughout [Shot 1]): fully_preserved - preserve the referenced face, hair, gown, gloves, earrings, badge, and shoes. Her new combat movements do not alter her identity or costume design.\n<Subject 2> (appears throughout [Shot 1]): fully_preserved - preserve the referenced face, hair, facial mechanical details, armor construction, color distribution, and ear assemblies. Lower-body armor is a coherent extension of the visible design.\nExclude reference-sheet typography, gray face-obscuring squares, borders, duplicated views, and studio backgrounds. Neither picture is a first-frame or composition anchor.\n\ndetailed_description:\nPhotorealistic cinematic action, 16:9, exactly ten seconds, one uninterrupted take. Choreography is fast, varied, and causally connected: each defense creates the next attack. Every strike has a readable trajectory and reaction, with grounded balance rather than weightless acrobatics.\n\n[Shot 1] Inside a dim concrete sewer, <Subject 1> starts left foreground in her black slit gown and gloves; <Subject 2> faces her right midground in white-and-orange armor. Their referenced faces remain distinct. Shallow water covers rough concrete footing. Corroded pipes line the walls; cyan maintenance lights and a weak amber backlight reveal faces, limbs, and reflections without brightening the tunnel excessively.\n\nDuring 00:00.000–00:01.600, the camera rapidly pushes from a medium-wide view into a waist-up two-shot. <Subject 2> advances with a left jab followed immediately by a right cross. <Subject 1> parries the jab, slips outside the cross, and answers with a short right elbow toward the shoulder. <Subject 2> turns her armored upper arm into the elbow. Sharp glove movement, a metallic knock, and quick splashes punctuate the combination.\n\nDuring 00:01.600–00:03.000, <Subject 2> converts the close contact into a driving right knee toward the abdomen. <Subject 1> braces both forearms against the rising thigh, pivots off its line, and releases immediately. As the knee lowers, she drops her center of gravity and sends a low right-leg sweep toward the supporting ankle. The camera curves laterally and pulls back to reveal both fighters’ feet. <Subject 2> makes a compact hop over the sweep and lands with a broad splash.\n\nDuring 00:03.000–00:04.300, <Subject 1> retracts her sweeping leg and rises. <Subject 2> uses the landing to initiate a turning right back kick toward her upper torso, looking over her shoulder before extending. The camera tracks the rotation from outside the kick’s path, keeping attacker, target, and planted foot visible. <Subject 1> bends her knees and shifts diagonally backward, narrowly clearing the armored heel.\n\nDuring 00:04.300–00:05.400, the heel passes just in front of <Subject 1>’s shoulder. Ramp into extreme slow motion for this single near miss. The camera smoothly orbits sixty degrees with a slight push-in, revealing the gap between armor and black fabric through genuine spatial parallax. The kicking leg continues extending gradually; hair, skirt folds, and airborne droplets drift rather than freeze. Stretched water noise and a subdued mechanical whine replace the sharp impacts.\n\nDuring 00:05.400–00:07.500, snap back to full speed. <Subject 2> retracts the kick, plants her foot, and turns back with a reaching left punch. <Subject 1> redirects the wrist, captures that forearm with both hands, and steps outside the attacking arm. <Subject 2> bends her elbow and drives forward to break the control. The camera follows laterally, widening to preserve their hands, hips, and footing.\n\nDuring 00:07.500–00:10.000, <Subject 1> yields to that forward pressure, pivots beside <Subject 2>, and blocks her advancing ankle while drawing the captured arm diagonally down. Momentum carries <Subject 2> into a low sideways trip rather than an overhead lift. She lands on her armored side, immediately rolls through, and rises onto one knee facing her opponent. <Subject 1> releases before the fall and steps into guard. The camera dips with the takedown, then retreats into a clear two-person view as water slaps down. End with both ready to continue, without a pose hold or fade.\n\noverall_soundscape:\nLow flowing water, irregular drips, and short concrete-tunnel reverberation continue throughout. Synchronize distinct sounds to each technique: fast punch swishes, a hard elbow-on-armor knock, a muted knee interception, scraping water during the sweep, a heavy landing splash, mechanical rotation during the kick, glove friction during wrist control, and a deep armored impact during the trip. Brief exertion breaths, no dialogue. Stretch and attenuate sound only during 00:04.300–00:05.400; restore crisp combat transients immediately afterward.\n\nnon_diegetic_music:\nA restrained fast industrial percussion rhythm with low bass supports the fight without covering contact sounds. Percussion briefly drops out during the bullet-time interval, leaving a low sustained tone, then returns sharply with normal-speed action. No vocals.",
         "star7_prompt_import_actions": ""
       },
       "color": "#223",
@@ -2183,8 +2153,8 @@
       "id": 376,
       "type": "MiniMaxH3OneClickHDStar7",
       "pos": [
-        -1963.0808868932631,
-        6945.003596048316
+        -1966.881965337384,
+        7019.7599484223265
       ],
       "size": [
         412.4362008599669,
@@ -2193,7 +2163,7 @@
       "flags": {
         "collapsed": false
       },
-      "order": 34,
+      "order": 39,
       "mode": 0,
       "inputs": [
         {
@@ -2214,7 +2184,8 @@
           "type": "BOOLEAN",
           "widget": {
             "name": "enable_hd"
-          }
+          },
+          "link": null
         },
         {
           "label": "高清放大模型",
@@ -2258,7 +2229,8 @@
           "type": "COMBO",
           "widget": {
             "name": "preset"
-          }
+          },
+          "link": null
         },
         {
           "label": "目标像素（MP）",
@@ -2266,7 +2238,8 @@
           "type": "FLOAT",
           "widget": {
             "name": "target_megapixels"
-          }
+          },
+          "link": null
         },
         {
           "label": "高清修复步数",
@@ -2274,7 +2247,8 @@
           "type": "INT",
           "widget": {
             "name": "refine_steps"
-          }
+          },
+          "link": null
         },
         {
           "label": "高清修复强度",
@@ -2282,7 +2256,8 @@
           "type": "FLOAT",
           "widget": {
             "name": "refine_strength"
-          }
+          },
+          "link": null
         },
         {
           "label": "高清种子",
@@ -2290,7 +2265,8 @@
           "type": "INT",
           "widget": {
             "name": "seed"
-          }
+          },
+          "link": null
         },
         {
           "label": "启用分格",
@@ -2298,7 +2274,8 @@
           "type": "BOOLEAN",
           "widget": {
             "name": "enable_tiling"
-          }
+          },
+          "link": null
         },
         {
           "label": "分格数量",
@@ -2306,7 +2283,8 @@
           "type": "INT",
           "widget": {
             "name": "tile_count"
-          }
+          },
+          "link": null
         },
         {
           "label": "分格重叠（像素）",
@@ -2314,7 +2292,8 @@
           "type": "INT",
           "widget": {
             "name": "tile_overlap"
-          }
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2335,7 +2314,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "e0ac4cfa579dd7ddab9ffe9527155b96f40d6eca",
         "Node name for S&R": "MiniMaxH3OneClickHDStar7",
         "star7CustomHDParams": {
           "target_megapixels": 2,
@@ -2344,7 +2323,7 @@
         },
         "star7HDSavedValues": {
           "enable_hd": false,
-          "upscale_model": "minimax_h3_latent_upscaler_3d_fp16.safetensors",
+          "upscale_model": "h3_upscaler_lms_v0.1.safetensors",
           "second_pass_lora": "继承一采",
           "second_pass_lora_strength": 1,
           "second_pass_attention": "继承一采",
@@ -2352,7 +2331,7 @@
           "target_megapixels": 2,
           "refine_steps": 2,
           "refine_strength": 0.3,
-          "seed": 287983578461087,
+          "seed": 313449178695515,
           "enable_tiling": true,
           "tile_count": 4,
           "tile_overlap": 128
@@ -2365,7 +2344,7 @@
       },
       "widgets_values": [
         false,
-        "minimax_h3_latent_upscaler_3d_fp16.safetensors",
+        "h3_upscaler_lms_v0.1.safetensors",
         "继承一采",
         1,
         "继承一采",
@@ -2373,7 +2352,7 @@
         2,
         2,
         0.3,
-        287983578461087,
+        313449178695515,
         "randomize",
         true,
         4,
@@ -2381,7 +2360,7 @@
       ],
       "widgets_values_named": {
         "enable_hd": false,
-        "upscale_model": "minimax_h3_latent_upscaler_3d_fp16.safetensors",
+        "upscale_model": "h3_upscaler_lms_v0.1.safetensors",
         "second_pass_lora": "继承一采",
         "second_pass_lora_strength": 1,
         "second_pass_attention": "继承一采",
@@ -2389,7 +2368,7 @@
         "target_megapixels": 2,
         "refine_steps": 2,
         "refine_strength": 0.3,
-        "seed": 287983578461087,
+        "seed": 313449178695515,
         "control_after_generate": "randomize",
         "enable_tiling": true,
         "tile_count": 4,
@@ -2402,15 +2381,15 @@
       "id": 395,
       "type": "MiniMaxH3FaceRefineLatentStar7",
       "pos": [
-        -1514.3776781700296,
-        6941.707453665475
+        -1518.1787566141504,
+        7016.463806039486
       ],
       "size": [
         406.91410340837047,
         734
       ],
       "flags": {},
-      "order": 35,
+      "order": 40,
       "mode": 0,
       "inputs": [
         {
@@ -2586,7 +2565,7 @@
       ],
       "properties": {
         "cnr_id": "minimax-h3-chunk-star7",
-        "ver": "2.16.2",
+        "ver": "7da38d5087d7b2eb0b586f7887c7c8a810829bea",
         "Node name for S&R": "MiniMaxH3FaceRefineLatentStar7",
         "ue_properties": {
           "widget_ue_connectable": {},
@@ -2595,11 +2574,11 @@
         },
         "star7CustomFaceParams": {
           "refine_steps": 4,
-          "custom_strength": 0.48,
+          "custom_strength": 0.25,
           "custom_canvas": "768",
-          "custom_crop_context": 2.4,
-          "custom_blend": 0.95,
-          "custom_feather": 18
+          "custom_crop_context": 2.7,
+          "custom_blend": 1,
+          "custom_feather": 6
         }
       },
       "widgets_values": [
@@ -2617,7 +2596,7 @@
         2.4,
         0.95,
         18,
-        854222478347013,
+        972907551148450,
         "randomize",
         true
       ],
@@ -2636,7 +2615,7 @@
         "custom_crop_context": 2.4,
         "custom_blend": 0.95,
         "custom_feather": 18,
-        "seed": 854222478347013,
+        "seed": 972907551148450,
         "control_after_generate": "randomize",
         "preserve_repair_detail": true
       },
@@ -2665,7 +2644,8 @@
           "type": "COMBO",
           "widget": {
             "name": "aspect_ratio"
-          }
+          },
+          "link": null
         },
         {
           "label": "megapixels",
@@ -2673,7 +2653,8 @@
           "type": "FLOAT",
           "widget": {
             "name": "megapixels"
-          }
+          },
+          "link": null
         },
         {
           "label": "multiple",
@@ -2681,15 +2662,8 @@
           "type": "INT",
           "widget": {
             "name": "multiple"
-          }
-        },
-        {
-          "name": "preview",
-          "shape": 7,
-          "type": "RESOLUTION_PREVIEW",
-          "widget": {
-            "name": "preview"
-          }
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -2734,6 +2708,277 @@
         "megapixels": 1,
         "multiple": 32
       }
+    },
+    {
+      "id": 403,
+      "type": "MiniMaxH3LoadImageScaleStar7",
+      "pos": [
+        -2894.614735800591,
+        6369.267849819235
+      ],
+      "size": [
+        264.352969297654,
+        422
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 25,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            533
+          ]
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "minimax-h3-chunk-star7",
+        "ver": "75d863dff6a7e15cbfa52f5b7d90ff1af153000d",
+        "Node name for S&R": "MiniMaxH3LoadImageScaleStar7",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.2"
+        }
+      },
+      "widgets_values": [
+        "reference-403.png",
+        1280,
+        false,
+        false,
+        "16:9",
+        "image"
+      ],
+      "widgets_values_named": {
+        "image": "予希同学AI-别乱输指令 人物出图差全在提示词-01(1).jpg",
+        "最长边": 1280,
+        "允许小图放大": false,
+        "调整比例": false,
+        "目标比例": "16:9",
+        "upload": "image"
+      },
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 404,
+      "type": "MiniMaxH3LoadImageScaleStar7",
+      "pos": [
+        -2606.3405075325245,
+        6368.09377311936
+      ],
+      "size": [
+        277.7308545909186,
+        424.56824299295295
+      ],
+      "flags": {},
+      "order": 26,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            534
+          ]
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "minimax-h3-chunk-star7",
+        "ver": "75d863dff6a7e15cbfa52f5b7d90ff1af153000d",
+        "Node name for S&R": "MiniMaxH3LoadImageScaleStar7",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.2"
+        }
+      },
+      "widgets_values": [
+        "reference-404.png",
+        1280,
+        false,
+        false,
+        "16:9",
+        "image"
+      ],
+      "widgets_values_named": {
+        "image": "予希同学AI-别乱输指令 人物出图差全在提示词-01.jpg",
+        "最长边": 1280,
+        "允许小图放大": false,
+        "调整比例": false,
+        "目标比例": "16:9",
+        "upload": "image"
+      },
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 405,
+      "type": "MiniMaxH3LoadImageScaleStar7",
+      "pos": [
+        -2305.7456822133904,
+        6369.34884264411
+      ],
+      "size": [
+        272.7372778138242,
+        425.9011799564396
+      ],
+      "flags": {},
+      "order": 27,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            535
+          ]
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "minimax-h3-chunk-star7",
+        "ver": "75d863dff6a7e15cbfa52f5b7d90ff1af153000d",
+        "Node name for S&R": "MiniMaxH3LoadImageScaleStar7",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.5.2"
+        }
+      },
+      "widgets_values": [
+        "reference-405.png",
+        1280,
+        false,
+        false,
+        "16:9",
+        "image"
+      ],
+      "widgets_values_named": {
+        "image": "予希同学AI-别乱输指令 人物出图差全在提示词-01.jpg",
+        "最长边": 1280,
+        "允许小图放大": false,
+        "调整比例": false,
+        "目标比例": "16:9",
+        "upload": "image"
+      },
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 408,
+      "type": "Star7VedaSparseAttention",
+      "pos": [
+        -1071.043198214719,
+        5614.138236066014
+      ],
+      "size": [
+        408.49013326517957,
+        202
+      ],
+      "flags": {},
+      "order": 32,
+      "mode": 4,
+      "inputs": [
+        {
+          "label": "模型",
+          "name": "model",
+          "type": "MODEL",
+          "link": 547
+        }
+      ],
+      "outputs": [
+        {
+          "name": "模型",
+          "type": "MODEL",
+          "links": [
+            504
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "minimax-h3-chunk-star7",
+        "ver": "eefb9c60ef67c72d7ef2b1c710eefc1498427b84",
+        "Node name for S&R": "Star7VedaSparseAttention",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.5.2",
+          "input_ue_unconnectable": {}
+        }
+      },
+      "widgets_values": [
+        "minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors",
+        "90%",
+        "90%",
+        "",
+        "",
+        true,
+        true
+      ],
+      "widgets_values_named": {
+        "predictor": "minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors",
+        "generated_sparsity": "90%",
+        "reference_sparsity": "90%",
+        "full_attention_layers": "",
+        "full_attention_steps": "",
+        "verbose": true,
+        "enabled": true
+      },
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 409,
+      "type": "MarkdownNote",
+      "pos": [
+        -1068.4275513048594,
+        5455.806133844007
+      ],
+      "size": [
+        396.9297126852117,
+        95.40024994425858
+      ],
+      "flags": {},
+      "order": 28,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "VEDA加速提醒事项",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.5.2",
+          "input_ue_unconnectable": {}
+        }
+      },
+      "widgets_values": [
+        "开启VEDA加速需要下载minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors模型放置在ComfyUI\\models\\veda目录下\n\n可以和ck同时开启使用"
+      ],
+      "widgets_values_named": {
+        "text": "开启VEDA加速需要下载minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors模型放置在ComfyUI\\models\\veda目录下\n\n可以和ck同时开启使用"
+      },
+      "color": "#432",
+      "bgcolor": "#653"
     }
   ],
   "links": [
@@ -2762,46 +3007,6 @@
       "SIGMAS"
     ],
     [
-      250,
-      135,
-      0,
-      134,
-      0,
-      "FLOAT"
-    ],
-    [
-      380,
-      134,
-      1,
-      275,
-      23,
-      "INT"
-    ],
-    [
-      382,
-      130,
-      0,
-      275,
-      1,
-      "CLIP"
-    ],
-    [
-      383,
-      121,
-      0,
-      275,
-      2,
-      "VAE"
-    ],
-    [
-      384,
-      122,
-      0,
-      275,
-      3,
-      "VAE"
-    ],
-    [
       385,
       275,
       2,
@@ -2818,22 +3023,6 @@
       "CONDITIONING"
     ],
     [
-      402,
-      115,
-      1,
-      275,
-      22,
-      "INT"
-    ],
-    [
-      403,
-      115,
-      0,
-      275,
-      21,
-      "INT"
-    ],
-    [
       423,
       308,
       0,
@@ -2842,52 +3031,12 @@
       "SAMPLER"
     ],
     [
-      449,
-      325,
-      0,
-      275,
-      8,
-      "IMAGE"
-    ],
-    [
-      452,
-      326,
-      0,
-      275,
-      9,
-      "IMAGE"
-    ],
-    [
       463,
       150,
       0,
       339,
       0,
       "VHS_FILENAMES"
-    ],
-    [
-      464,
-      341,
-      0,
-      275,
-      12,
-      "IMAGE"
-    ],
-    [
-      465,
-      341,
-      1,
-      275,
-      15,
-      "AUDIO"
-    ],
-    [
-      466,
-      342,
-      0,
-      275,
-      13,
-      "IMAGE"
     ],
     [
       470,
@@ -2904,38 +3053,6 @@
       126,
       0,
       "MODEL"
-    ],
-    [
-      474,
-      334,
-      0,
-      275,
-      20,
-      "STRING"
-    ],
-    [
-      480,
-      363,
-      0,
-      275,
-      0,
-      "MODEL"
-    ],
-    [
-      481,
-      275,
-      0,
-      360,
-      0,
-      "MODEL"
-    ],
-    [
-      484,
-      342,
-      1,
-      275,
-      16,
-      "AUDIO"
     ],
     [
       482,
@@ -2978,14 +3095,6 @@
       "AUDIO"
     ],
     [
-      497,
-      327,
-      0,
-      275,
-      10,
-      "IMAGE"
-    ],
-    [
       502,
       391,
       0,
@@ -3003,7 +3112,7 @@
     ],
     [
       504,
-      313,
+      408,
       0,
       363,
       0,
@@ -3040,6 +3149,174 @@
       376,
       0,
       "LATENT"
+    ],
+    [
+      547,
+      313,
+      0,
+      408,
+      0,
+      "MODEL"
+    ],
+    [
+      481,
+      275,
+      0,
+      360,
+      0,
+      "MODEL"
+    ],
+    [
+      250,
+      135,
+      0,
+      134,
+      0,
+      "FLOAT"
+    ],
+    [
+      480,
+      363,
+      0,
+      275,
+      0,
+      "MODEL"
+    ],
+    [
+      382,
+      130,
+      0,
+      275,
+      1,
+      "CLIP"
+    ],
+    [
+      383,
+      121,
+      0,
+      275,
+      2,
+      "VAE"
+    ],
+    [
+      384,
+      122,
+      0,
+      275,
+      3,
+      "VAE"
+    ],
+    [
+      524,
+      325,
+      0,
+      275,
+      8,
+      "IMAGE"
+    ],
+    [
+      525,
+      326,
+      0,
+      275,
+      9,
+      "IMAGE"
+    ],
+    [
+      526,
+      327,
+      0,
+      275,
+      10,
+      "IMAGE"
+    ],
+    [
+      533,
+      403,
+      0,
+      275,
+      11,
+      "IMAGE"
+    ],
+    [
+      534,
+      404,
+      0,
+      275,
+      12,
+      "IMAGE"
+    ],
+    [
+      535,
+      405,
+      0,
+      275,
+      13,
+      "IMAGE"
+    ],
+    [
+      464,
+      341,
+      0,
+      275,
+      15,
+      "IMAGE"
+    ],
+    [
+      466,
+      342,
+      0,
+      275,
+      16,
+      "IMAGE"
+    ],
+    [
+      465,
+      341,
+      1,
+      275,
+      18,
+      "AUDIO"
+    ],
+    [
+      484,
+      342,
+      1,
+      275,
+      19,
+      "AUDIO"
+    ],
+    [
+      548,
+      334,
+      0,
+      275,
+      23,
+      "STRING"
+    ],
+    [
+      403,
+      115,
+      0,
+      275,
+      24,
+      "INT"
+    ],
+    [
+      402,
+      115,
+      1,
+      275,
+      25,
+      "INT"
+    ],
+    [
+      380,
+      134,
+      1,
+      275,
+      26,
+      "INT"
     ]
   ],
   "groups": [
@@ -3085,8 +3362,8 @@
       "bounding": [
         -2912.437701754306,
         5811.77085134517,
-        903.3736709856419,
-        527.2293420940969
+        891.9502358371965,
+        999.4009058543243
       ],
       "color": "#8A8",
       "flags": {}
@@ -3095,8 +3372,8 @@
       "id": 10,
       "title": "参考视频载入（支持拖动文件导入）（不使用时按Ctrl+B绕过）",
       "bounding": [
-        -2911.180664015975,
-        6361.276485019233,
+        -2918.6010797565423,
+        6834.737697498082,
         901.2651898492643,
         1053.0785671622498
       ],
@@ -3116,13 +3393,13 @@
       4
     ],
     "VHS_latentpreviewrate": 0,
-    "frontendVersion": "1.52.7",
+    "frontendVersion": "1.53.10",
     "VHS_latentpreview": false,
     "ds": {
-      "scale": 0.7972024500000089,
+      "scale": 0.49537388164653984,
       "offset": [
-        2669.631415163681,
-        -5269.855688098398
+        4580.408412933788,
+        -5450.167419530653
       ]
     }
   },

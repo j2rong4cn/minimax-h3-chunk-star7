@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.18.0 - 2026-10-06
+
+- Integrate optional VEDA sparse attention with SM75 native CUDA and SM80+ upstream Triton dispatch; support ordinary H3 sampling and Star7 chunked CK.
+- Add an enable switch, localized controls, and log-only VEDA diagnostics.
+- Preserve TAEH3 temporal state and native latent resolution; skip unselected final RGB frames using preview FPS.
+- Add 1024-pixel previews and adjustable WebP quality; preserve older workflow defaults.
+- Update the bilingual example workflows to the 1006 edition. Optional VEDA, HD and Face Repair remain bypassed or disabled.
+
 ## 2.17.3 - 2026-10-01
 
 - Add native SM75 W4A8 dispatch with CK fallback and preserve VDN hybrid attention.

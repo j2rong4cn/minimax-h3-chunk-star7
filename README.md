@@ -2,7 +2,7 @@
 
 [中文说明](#中文说明) · [English](README_EN.md) · [实测记录](BENCHMARKS.md) · [示例工作流](examples/workflows)
 
-新版示例基于 0919 工作流，顺序为一采 → 可选二采 → 可选人脸修复 → Star7 分块解码；二采与修脸默认关闭。请先选择本机模型文件，需要参考素材时载入自己的图片或视频并取消绕过。修脸需分块项目 2.16.2 或更新版本。
+1006 中英文示例包含：一采 → 可选二采高清 → 可选人脸修复 → Star7 分块解码，加入按帧率控制的实时预览及默认旁路的 VEDA。请自行选择已安装的模型并替换参考素材占位文件。
 
 This ComfyUI project helps MiniMax H3 run high-quality, long-duration video generation on GPUs with limited VRAM. Its core node provides independent QKV, RoPE, and MLP activation chunking together with a selectable attention backend. It does not change the sampler, sigma schedule, latent layout, VAE, duration, frame count, or output resolution.
 
@@ -236,7 +236,7 @@ UNET Loader -> LoRA -> Attention patch（可选）
                                       `-> Scheduler -----------------> Sampler
 ```
 
-实时预览顶部提供“显示预览”总开关；关闭后直接返回原 MODEL，不安装采样回调，也不加载、下载或解码 TAEH3。开启时默认均匀抽取 25 个时间位置、预览长边 512；帧数可设置为 4–64。“只显示第一步预览”默认关闭，开启后仅在 Step 1 解码一次，后续采样步骤不再产生预览开销。鼠标悬浮在预览画面上会显示迷你时间轴，拖动时定位画面，松开后从当前位置继续循环播放。切换到其他网页后返回时会重绘保留帧；若页面休眠期间漏收事件，会从后端取回该节点最近一次 WebP。动态画面仍按设置逐步更新，但每步重复的模型驻留和成功编码 INFO 会被安静处理；首次解码器识别、下载状态及所有异常仍会记录，使采样速度行保持清晰。它只接在 Guider 的 MODEL 路径，Scheduler 可继续直接连接 Chunk。
+实时预览顶部提供“显示预览”总开关；关闭后直接返回原 MODEL，不安装采样回调，也不加载、下载或解码 TAEH3。开启时默认按每秒 5 帧预览完整时间轴、预览长边 512；帧率可设置为 1–24。“只显示第一步预览”默认关闭，开启后仅在 Step 1 解码一次，后续采样步骤不再产生预览开销。鼠标悬浮在预览画面上会显示迷你时间轴，拖动时定位画面，松开后从当前位置继续循环播放。切换到其他网页后返回时会重绘保留帧；若页面休眠期间漏收事件，会从后端取回该节点最近一次 WebP。动态画面仍按设置逐步更新，但每步重复的模型驻留和成功编码 INFO 会被安静处理；首次解码器识别、下载状态及所有异常仍会记录，使采样速度行保持清晰。它只接在 Guider 的 MODEL 路径，Scheduler 可继续直接连接 Chunk。
 
 实时预览使用约 22MB 的 `taeh3.safetensors`；也兼容已安装的 `taeh3_decoder.safetensors` 文件名。若两者都缺少，节点会优先并行尝试 HF 国内镜像与官方 madebyollin/taehv 固定版本，再按顺序切换其他来源，并校验 SHA-256；采样不会等待下载。下载完成后的下一个采样步骤会立即开始预览；若直到最终步骤才完成且此前没有显示过预览，则最终步骤只补发一次预览。下载失败只关闭预览，不影响正式生成。
 
@@ -381,3 +381,15 @@ STAR7_SLA_LONG_SELF_TEST=1
 ## License
 
 Star7 项目代码使用 [MIT License](LICENSE)。内置的 NVIDIA Sol-Attn 源码按其 [Apache 2.0 License](vendor/LICENSE.NVIDIA-Sana-Apache-2.0) 与 [第三方声明](vendor/sol_attn/THIRD_PARTY_NOTICES.md) 分发。H3 AdaLN 曲线网格及适配机制的来源与许可见 [Larryvrh H3 Turbo 声明](vendor/LARRYVRH-H3-TURBO-NOTICE.md)。
+
+### VEDA 与实时预览
+
+VEDA 节点顶部的「启用 VEDA」开关关闭时直接透传模型，不加载预测器、不安装补丁。参数使用中文名称，旧工作流无需补填开关。显卡自动分流：SM75 使用 Star7 CUDA 内核，SM80 及以上使用上游 Triton 内核；普通 H3 采样与 Star7 分块 CK 链路均可连接。路由、耗时及诊断信息只输出到日志。
+
+内置 `Star7VedaSparseAttention`，无需单独安装 VEDA 插件。模型链路：LoRA / Sigma Shift → VEDA → Star7 分块（CK）→ 实时预览 → Guider。SM75 使用内置 INT8 QK / FP16 PV Tensor Core 稀疏内核，直接读取 VEDA 选中的块，支持填充位遮罩；CK 负责未进入稀疏计算的注意力，分块继续负责 QKV / RoPE / MLP。其他稀疏注意力选择不要与 VEDA 叠加。SM75 尚属测试实现，完整工作流速度以实测为准。上游 VEDA 的 MIT 许可证及来源见 `vendor/veda/LICENSE` 和 `NOTICE.md`。
+
+实时预览长边支持 256 / 384 / 512 / 768 / 1024，并可调动画 WebP 质量 1–100。预览使用 TAEH3 原始 latent 分辨率并保留连续时间状态，末端 RGB 按 FPS 选择帧，再缩小输出图像；不再缩小 latent 或逐帧重置时间状态。提高 FPS 会增加末端解码计算量；预览不改变最终输出分辨率。旧工作流未保存质量值时保留 76，新节点默认 80。
+
+实时预览按每秒帧数（1–24，默认 5）覆盖整段视频：10 秒约 50 帧。TAEH3 时间状态连续更新，但未选中的帧跳过最后的空间上采样/RGB 卷积、搬运与编码；保留帧与完整解码对应帧一致。预览长边在 RGB 解码后缩放，不降低时间状态部分的解码分辨率；压缩质量只影响编码。
+
+SM75 预编译 VEDA 内核面向 Windows x64 和已测试的嵌入式 Python/PyTorch 环境；其他版本需要在 CUDA 编译环境中用 `vendor/veda/kernels/native/build.py` 重新编译。

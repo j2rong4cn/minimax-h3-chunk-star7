@@ -7,11 +7,12 @@ const PREVIEW_FRAME_DURATION_MS = 167;
 
 const PREVIEW_TEXT = {
     en: {
+        quality: "Preview quality",
         title: "MiniMax H3 Live Preview - Star7",
         model: "Model",
         enabled: "Show preview",
         previewModel: "Preview model",
-        frames: "Temporal sample frames",
+        frames: "Display frame rate (FPS)",
         resolution: "Preview long edge",
         firstStepOnly: "Show first-step preview only",
     },
@@ -20,8 +21,9 @@ const PREVIEW_TEXT = {
         model: "模型",
         enabled: "显示预览",
         previewModel: "预览模型",
-        frames: "时间轴采样帧数",
+        frames: "显示帧率（FPS）",
         resolution: "预览长边",
+        quality: "预览质量",
         firstStepOnly: "只显示第一步预览",
     },
 };
@@ -103,7 +105,7 @@ function localizeNode(node) {
     if (modelInput) modelInput.label = modelInput.localized_name = text.model;
     if (modelOutput) modelOutput.label = modelOutput.localized_name = text.model;
 
-    const framesWidget = node.widgets?.find((widget) => widget.name === "preview_frames");
+    const framesWidget = node.widgets?.find((widget) => widget.name === "preview_fps");
     const enabledWidget = node.widgets?.find((widget) => widget.name === "preview_enabled");
     const resolutionWidget = node.widgets?.find((widget) => widget.name === "preview_resolution");
     const firstStepWidget = node.widgets?.find((widget) => widget.name === "first_step_only");
@@ -113,6 +115,8 @@ function localizeNode(node) {
     if (framesWidget) framesWidget.label = framesWidget.localized_name = text.frames;
     if (resolutionWidget) resolutionWidget.label = resolutionWidget.localized_name = text.resolution;
     if (firstStepWidget) firstStepWidget.label = firstStepWidget.localized_name = text.firstStepOnly;
+    const qualityWidget = node.widgets?.find((widget) => widget.name === "preview_quality");
+    if (qualityWidget) qualityWidget.label = qualityWidget.localized_name = text.quality;
 }
 
 function findNode(graph, qualifiedId) {
@@ -126,7 +130,7 @@ function findNode(graph, qualifiedId) {
     return current?.getNodeById?.(Number(parts.at(-1))) ?? null;
 }
 
-const PREVIEW_FIELDS = ["preview_frames", "preview_resolution", "first_step_only", "preview_enabled", "preview_model"];
+const PREVIEW_FIELDS = ["preview_fps", "preview_resolution", "first_step_only", "preview_enabled", "preview_model", "preview_quality"];
 
 function repairPreviewWidgetValues(configuration) {
     const values = configuration?.widgets_values ?? [];
@@ -134,25 +138,27 @@ function repairPreviewWidgetValues(configuration) {
     let positional;
     if (typeof values[0] === "boolean") {
         if (typeof values[1] === "string" && /\.(safetensors|pt|pth|ckpt|bin)$/i.test(values[1])) {
-            positional = [values[2], values[3], values[4], values[0], values[1]];
+            positional = [values[2], values[3], values[5] ?? values[4], values[0], values[1], values.length > 5 ? values[4] : undefined];
         } else {
             positional = [values[1], values[2], values[3], values[0], values[5]];
         }
     } else {
-        positional = values.slice(0, 5);
+        positional = values.slice(0, 6);
     }
     const restored = PREVIEW_FIELDS.map((name, index) => named[name] ?? positional[index]);
-    const frames = Number(restored[0]);
+    const legacyFrames = named.preview_frames !== undefined && named.preview_fps === undefined;
+    const frames = legacyFrames ? 5 : Number(restored[0]);
     const resolution = String(restored[1]);
-    const validFrames = Number.isFinite(frames) && frames >= 4 && frames <= 64;
-    const validResolution = ["256", "384", "512"].includes(resolution);
+    const validFrames = Number.isFinite(frames) && frames >= 1 && frames <= 24;
+    const validResolution = ["256", "384", "512", "768", "1024"].includes(resolution);
     configuration.widgets_values = [
-        validFrames ? Math.round(frames) : 25,
+        validFrames ? Math.round(frames) : 5,
         validResolution ? resolution : "512",
         validFrames && validResolution && typeof restored[2] === "boolean" ? restored[2] : false,
         typeof restored[3] === "boolean" ? restored[3] : true,
         typeof restored[4] === "string" && /\.(safetensors|pt|pth|ckpt|bin)$/i.test(restored[4])
             ? restored[4] : "taeh3.safetensors",
+        typeof restored[5] === "number" && Number.isFinite(restored[5]) ? Math.max(1, Math.min(100, Math.round(Number(restored[5])))) : 76,
     ];
 }
 
@@ -164,8 +170,17 @@ function orderPreviewWidgets(node, names) {
     ];
 }
 
+function migratePreviewFramesWidget(node) {
+    const old = node.widgets?.find((widget) => widget.name === "preview_frames");
+    if (!old) return;
+    old.name = "preview_fps";
+    old.value = 5;
+    old.options = { ...old.options, min: 1, max: 24, step: 1 };
+}
+
 function presentPreviewWidgets(node) {
-    orderPreviewWidgets(node, ["preview_enabled", "preview_model", "preview_frames", "preview_resolution", "first_step_only"]);
+    migratePreviewFramesWidget(node);
+    orderPreviewWidgets(node, ["preview_enabled", "preview_model", "preview_fps", "preview_resolution", "preview_quality", "first_step_only"]);
     localizeNode(node);
 }
 
@@ -185,8 +200,9 @@ app.registerExtension({
         const labels = {
             preview_enabled: text.enabled,
             preview_model: text.previewModel,
-            preview_frames: text.frames,
+            preview_fps: text.frames,
             preview_resolution: text.resolution,
+            preview_quality: text.quality,
             first_step_only: text.firstStepOnly,
         };
         for (const [name, spec] of Object.entries({ ...nodeData.input?.required, ...nodeData.input?.optional })) {
@@ -201,6 +217,7 @@ app.registerExtension({
 
         const originalNodeConfigure = nodeType.prototype.configure;
         nodeType.prototype.configure = function (configuration) {
+            migratePreviewFramesWidget(this);
             repairPreviewWidgetValues(configuration);
             const restored = [...configuration.widgets_values];
             orderPreviewWidgets(this, PREVIEW_FIELDS);
@@ -233,6 +250,7 @@ app.registerExtension({
             const chinese = language() === "zh";
 
             this.title = PREVIEW_TEXT[language()].title;
+            migratePreviewFramesWidget(this);
             localizeNode(this);
 
             const originalConfigure = this.onConfigure;
@@ -246,8 +264,8 @@ app.registerExtension({
             };
 
             setTimeout(() => {
-                const framesWidget = this.widgets?.find((widget) => widget.name === "preview_frames");
-                if (framesWidget && Number(framesWidget.value) < 4) framesWidget.value = 25;
+                const framesWidget = this.widgets?.find((widget) => widget.name === "preview_fps");
+                if (framesWidget && (Number(framesWidget.value) < 1 || Number(framesWidget.value) > 24)) framesWidget.value = 5;
                 localizeNode(this);
                 this.setDirtyCanvas?.(true, true);
             }, 250);
@@ -302,6 +320,7 @@ app.registerExtension({
             let decodedPreviewGeneration = 0;
             let dragging = false;
             let lastPreviewData = null;
+            let frameDurationMs = PREVIEW_FRAME_DURATION_MS;
 
             const closeFrames = (frames = decodedFrames) => {
                 for (const frame of frames) frame?.close?.();
@@ -334,7 +353,7 @@ app.registerExtension({
                     playbackTimer = null;
                     drawFrame((frameIndex + 1) % decodedFrames.length);
                     schedulePlayback();
-                }, PREVIEW_FRAME_DURATION_MS);
+                }, frameDurationMs);
             };
             const finishScrub = (event) => {
                 if (!dragging) return;
@@ -435,6 +454,7 @@ app.registerExtension({
                 }
                 if (typeof data.image !== "string") return;
                 lastPreviewData = data;
+                frameDurationMs = Number(data.fps) > 0 ? Math.round(1000 / Number(data.fps)) : PREVIEW_FRAME_DURATION_MS;
                 const bytes = Uint8Array.from(atob(data.image), (char) => char.charCodeAt(0));
                 const generation = ++decodeGeneration;
                 stopPlayback();
