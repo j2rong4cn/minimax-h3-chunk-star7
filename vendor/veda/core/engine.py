@@ -233,6 +233,9 @@ class VedaEngine:
             [S, H, D] contiguous, q's dtype.
         """
         timer = self.timer
+        begin_attention = getattr(self.backend, 'begin_attention', None)
+        if callable(begin_attention):
+            begin_attention(layer)
         seq_len, heads, dim = q.shape
         dtype = q.dtype
         if dtype not in self.backend.dtypes:

@@ -325,6 +325,8 @@ def _load_sla_backend():
 
 
 def _block_mean_fp32(x: torch.Tensor, block: int = SOL_BLOCK_Q) -> torch.Tensor:
+    if x.is_cuda and torch.cuda.get_device_capability(x.device) >= (8, 0):
+        return _load_sla_backend()._mean_pool(x, block, output_dtype=torch.float32)
     batch, heads, length, dim = x.shape
     blocks = (length + block - 1) // block
     padded = blocks * block
@@ -701,7 +703,7 @@ def run_custom_consume(
         else:
             q_int8, q_scale = native.quantize(q, 16)
     else:
-        q_int8, q_scale = sla._quantize(q.contiguous(), 16, multiplier=1.0)
+        q_int8, q_scale = sla._quantize(q, 16, multiplier=1.0)
     del q
     required_q_scales = query_blocks * 4
     if q_scale.shape[-1] < required_q_scales:
@@ -714,7 +716,7 @@ def run_custom_consume(
         else:
             k_int8, k_scale = native.quantize(k, SOL_BLOCK_K)
     else:
-        k_int8, k_scale = sla._quantize(k.contiguous(), SOL_BLOCK_K, multiplier=1.0)
+        k_int8, k_scale = sla._quantize(k, SOL_BLOCK_K, multiplier=1.0)
     del k
     if capability == (7, 5):
         if all_int8:
@@ -754,7 +756,7 @@ def run_custom_consume(
             )
         if capability < (8, 0) or triton is None:
             raise SolUnavailableError("SM80+ All-INT8 Sol requires SM80+ and Triton")
-        v_int8, v_scale = sla._quantize(v.contiguous(), SOL_BLOCK_K, multiplier=1.0)
+        v_int8, v_scale = sla._quantize(v, SOL_BLOCK_K, multiplier=1.0)
         del v
         k_centroid_int8, k_centroid_scale = sla._quantize(
             k_centroid, SOL_BLOCK_K, multiplier=1.0,

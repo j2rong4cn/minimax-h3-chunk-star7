@@ -13,6 +13,7 @@ from star7_chunk_test.vendor.veda.settings import VedaSettings
 from star7_chunk_test.vendor.veda.core.selection import Budget
 from star7_chunk_test.veda_star7 import NODE_CLASS_MAPPINGS
 from star7_chunk_test.vendor.veda import backends, hardware, nodes as veda_nodes
+from star7_chunk_test import nodes as chunk_nodes
 
 node_cls = NODE_CLASS_MAPPINGS['Star7VedaSparseAttention']
 schema = node_cls.INPUT_TYPES()
@@ -64,6 +65,12 @@ normal_attn = types.SimpleNamespace(heads=2, head_dim=128,
 hit.clear()
 normal_out = normal_ns['forward'](normal_attn, torch.randn(384,256,device='cuda',dtype=torch.float16), transformer_options=options)
 assert hit and normal_out.shape == (384,256)
+marker = object()
+with patch.object(chunk_nodes, '_minimax_ck_int8_attention_forward', return_value=marker) as ck:
+    for forward in (chunk_nodes._minimax_sla_forward, chunk_nodes._minimax_sol_forward):
+        assert forward(object(), object(), transformer_options={'star7_veda_active': True}) is marker
+    assert ck.call_count == 2
+print('Connected VEDA owns sparse attention; direct SLA/Sol use the shared chunk producer: PASS')
 
 spec = importlib.util.spec_from_file_location('star7_preview_quality_test', ROOT/'h3_live_preview.py')
 preview = importlib.util.module_from_spec(spec); spec.loader.exec_module(preview)

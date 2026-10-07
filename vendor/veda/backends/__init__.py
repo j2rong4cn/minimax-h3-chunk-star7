@@ -24,6 +24,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import logging
+import os
 import threading
 from collections.abc import Callable
 
@@ -33,7 +34,8 @@ from . import base
 from .. import hardware
 
 _MODULES = {'triton-int8': 'triton_int8', 'mlx': 'mlx_gather',
-            'star7-cuda-int8': 'torch_gather'}
+            'star7-cuda-int8': 'torch_gather', 'torch-reference': 'torch_reference',
+            'triton-bf16': 'triton_bf16'}
 _MIN_CC = (8, 0)
 _LOG = logging.getLogger('Star7-H3-VEDA')
 
@@ -66,6 +68,10 @@ def candidates(info: hardware.DeviceInfo) -> list[str]:
     if info.kind == 'cuda' and info.family != 'rocm' and info.cc:
         if info.cc == (7, 5):
             return ['star7-cuda-int8']
+        if info.cc >= (8, 0) and os.environ.get('STAR7_VEDA_REFERENCE', '').strip() == '1':
+            return ['torch-reference']
+        if info.cc >= (8, 0) and os.environ.get('STAR7_VEDA_BACKEND', '').strip() == 'triton-bf16':
+            return ['triton-bf16']
         return ['triton-int8'] if info.cc >= _MIN_CC else []
     if info.kind == 'mps':
         return ['mlx']

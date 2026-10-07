@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.18.6 - 2026-10-08
+
+- Reduce SM80+ SLA and All-INT8 Sol preprocessing copies and temporary memory.
+- Improve VEDA integration with chunked attention and add bounded per-run numerical diagnostics.
+
 ## 2.18.5 - 2026-10-08
 
 - Optimize Windows SM75 Sol kernel occupancy and preprocessing, reducing shared-memory use and QKV copies.

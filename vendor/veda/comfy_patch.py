@@ -86,6 +86,9 @@ class _Run:
         self.failed = None            # error text if the sparse path failed
         self.prepared = False
         self.announced: set = set()
+        self.started_engines = set()
+        self.input_layouts = set()
+        self.sample_amax = None
 
 
 class VedaPatch:
@@ -237,6 +240,19 @@ class VedaPatch:
         engine = self._engine(q.device)
         if engine is None:
             return dense('no sparse kernel')
+        key = str(q.device)
+        if key not in self.run.started_engines:
+            begin_run = getattr(engine.backend, 'begin_run', None)
+            if callable(begin_run):
+                begin_run()
+            self.run.started_engines.add(key)
+        if q.device.type == 'cuda' and torch.cuda.get_device_capability(q.device) >= (8, 0) and len(self.run.input_layouts) < 4:
+            self.run.input_layouts.add((tuple(q.shape), str(q.dtype),
+                tuple(tuple(value.stride()) for value in (q, k, v))))
+            if self.run.sample_amax is None:
+                positions = torch.tensor([0, q.shape[2] // 2, q.shape[2] - 1], device=q.device)
+                self.run.sample_amax = torch.stack([value.index_select(2, positions).float().abs().amax()
+                                                    for value in (q, k, v)])
         try:
             spec = engine.layout_spec(layout)
         except h3_layout.LayoutError as error:
@@ -359,6 +375,7 @@ class VedaPatch:
         """Puts the override on top of whatever override is on the hook;
         idempotent once it is on top."""
         self.run.prepared = True
+        transformer_options['star7_veda_active'] = True
         chunks = transformer_options.get('minimax_head_chunks')
         if isinstance(chunks, int) and chunks > 1:
             transformer_options['veda_held_head_chunks'] = chunks
@@ -372,6 +389,13 @@ class VedaPatch:
 
     def on_cleanup(self) -> None:
         """End of a sampling run: show the summary, reset per-run state."""
+        if self.run.input_layouts:
+            _LOG.info('[Star7 H3 VEDA] SM80+ input=(shape,dtype,Q/K/V strides) %s | sampled_Q/K/V_amax=%s',
+                      sorted(self.run.input_layouts), self.run.sample_amax.cpu().tolist())
+            for engine in self._engines.values():
+                if engine is not None and getattr(engine.backend, 'checks', None):
+                    _LOG.info('[Star7 H3 VEDA] SM80+ sampled numerical checks | backend=%s | %s',
+                              engine.backend.display, engine.backend.checks)
         summary = self._summary()
         if summary:
             self.status.show(summary)

@@ -201,9 +201,13 @@ def check_custom_quantization():
         assert q is parts[0] and k is parts[1]
         return counts, lut, 1.0, backend._block_mean_fp32(k).half(), torch.zeros_like(counts), lut[..., :0]
     def quantize(value, block, multiplier):
-        assert value.is_contiguous()
+        assert value.stride(-1) == 1
         captured.append(value.shape)
-        return torch.zeros_like(value, dtype=torch.int8), torch.ones(1, 2, (value.shape[2]+block-1)//block)
+        return torch.zeros(value.shape, dtype=torch.int8), torch.ones(1, 2, (value.shape[2]+block-1)//block)
+    def pool(value, block, output_dtype):
+        assert output_dtype == torch.float32
+        return torch.stack([value[:, :, start:start+block].float().mean(-2)
+                            for start in range(0, value.shape[2], block)], dim=2)
     class Kernel:
         def __getitem__(self, grid):
             def call(*args, **kwargs):
@@ -212,12 +216,12 @@ def check_custom_quantization():
     with patch.object(torch.Tensor, "is_cuda", property(lambda value: True)), \
          patch.object(torch.cuda, "get_device_capability", return_value=(8, 6)), \
          patch.object(backend, "build_custom_routing", routing), \
-         patch.object(backend, "_load_sla_backend", return_value=SimpleNamespace(_quantize=quantize)), \
+         patch.object(backend, "_load_sla_backend", return_value=SimpleNamespace(_quantize=quantize, _mean_pool=pool)), \
          patch.object(backend, "triton", object()), \
          patch.object(backend, "_sol_qk_int8_pv_int8_kernel", Kernel(), create=True):
         result = backend.run_custom_consume(list(parts), all_int8=True)
         assert result.output.shape == parts[0].shape and len(captured) == 5
-    print("SM80+ custom INT8 routing views and deferred contiguous quantization: PASS")
+    print("SM80+ custom INT8 routing views and direct strided quantization: PASS")
 
 
 def check_native_gpu():

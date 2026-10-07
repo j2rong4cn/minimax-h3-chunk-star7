@@ -136,7 +136,7 @@ def _attention_kernel(Q, K, V, Q_scale, K_scale, Index, Count, Valid, Out,
                       stride_n, stride_h, stride_vn, stride_vh,
                       stride_qs, stride_ks, stride_ih, stride_iq,
                       n_q_tiles, D: tl.constexpr, BLK: tl.constexpr,
-                      BLOCK_M: tl.constexpr):
+                      BLOCK_M: tl.constexpr, FP32_PV: tl.constexpr = False):
     query_tile = tl.program_id(0)
     head = tl.program_id(1)
     offs_m = query_tile * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -175,7 +175,10 @@ def _attention_kernel(Q, K, V, Q_scale, K_scale, Index, Count, Valid, Out,
         acc = acc * alpha[:, None]
         v = tl.load(V + head * stride_vh + (start + offs_n)[:, None] * stride_vn
                     + offs_d[None, :])
-        acc += tl.dot(p.to(tl.float16), v, out_dtype=tl.float16)
+        if FP32_PV:
+            acc += tl.dot(p.to(tl.float16), v, out_dtype=tl.float32)
+        else:
+            acc += tl.dot(p.to(tl.float16), v, out_dtype=tl.float16)
         m_i = m_ij
 
     # A query tile with nothing kept would divide by zero; selection always
@@ -192,7 +195,7 @@ def _attention_tma_kernel(Q, K, V, Q_scale, K_scale, Index, Count, Valid,
                           stride_kh, stride_vn, stride_vh, stride_qs,
                           stride_ks, stride_ih, stride_iq, n_q_tiles,
                           D: tl.constexpr, BLK: tl.constexpr,
-                          BLOCK_M: tl.constexpr):
+                          BLOCK_M: tl.constexpr, FP32_PV: tl.constexpr = False):
     """The same attention, fetching K and V through TMA.
 
     A block-sparse walk reads key blocks at addresses it only learns inside
@@ -248,8 +251,10 @@ def _attention_tma_kernel(Q, K, V, Q_scale, K_scale, Index, Count, Valid,
         alpha = tl.math.exp2(m_i - m_ij)
         l_i = l_i * alpha + tl.sum(p, 1)
         acc = acc * alpha[:, None]
-        acc += tl.dot(p.to(tl.float16), v_desc.load([start, 0]),
-                      out_dtype=tl.float16)
+        if FP32_PV:
+            acc += tl.dot(p.to(tl.float16), v_desc.load([start, 0]), out_dtype=tl.float32)
+        else:
+            acc += tl.dot(p.to(tl.float16), v_desc.load([start, 0]), out_dtype=tl.float16)
         m_i = m_ij
 
     l_i = tl.where(l_i > 0.0, l_i, 1.0)
@@ -310,7 +315,8 @@ def key_blocks(index: torch.Tensor, count: torch.Tensor,
 def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
            index: torch.Tensor, count: torch.Tensor,
            valid_count: torch.Tensor,
-           softmax_scale: float | None = None) -> torch.Tensor:
+           softmax_scale: float | None = None, *, fp32_pv: bool = False,
+           num_stages: int | None = None) -> torch.Tensor:
     """Block-sparse INT8 attention on tile-ordered tensors.
 
     Args:
@@ -331,6 +337,11 @@ def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     if OVERRIDE is not None:  # tools/tune_int8.py sweeps these
         use_tma, key_block = OVERRIDE['tma'], OVERRIDE['key_block']
         warps, stages = OVERRIDE['num_warps'], OVERRIDE['num_stages']
+    if num_stages is not None:
+        stages = int(num_stages)
+    # These kernels use canonical NHD strides for Q/K/Out; materialize views
+    # at this boundary rather than reusing a mismatched input stride.
+    q, k, v = (value.contiguous() for value in (q, k, v))
     q_int8, q_scale = quantize(q, TILE, pre_scale=scale * LOG2E)
     if use_tma:
         k_int8, k_scale = quantize_transposed(k, key_block)
@@ -342,6 +353,7 @@ def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     out = torch.empty_like(q)
     options = dict(n_q_tiles=slots // TILE, D=dim, BLK=key_block,
                    BLOCK_M=TILE, num_warps=warps, num_stages=stages)
+    options['FP32_PV'] = bool(fp32_pv)
     common = (q_scale.stride(0), k_scale.stride(0), blocks.stride(0),
               blocks.stride(1))
     grid = (slots // TILE, heads)

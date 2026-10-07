@@ -16,13 +16,14 @@ import torch
 import torch.nn.functional as F
 
 try:
-    from . import star7_w4a8, h3_preprocess
+    from . import star7_w4a8, h3_preprocess, sm80_diagnostics
 except ImportError:
     import star7_w4a8
     import h3_preprocess
+    import sm80_diagnostics
 
 _LOG = logging.getLogger("MiniMaxH3ActivationChunkStar7")
-NODE_VERSION = "2.18.5"
+NODE_VERSION = "2.18.6"
 FP16_EXACT_PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 HYBRID_ALL_INT8_BACKEND_NAME = "hybrid_sm75_ck_sla_all_int8"
 SM86PLUS_BACKEND_NAME = "sla_sm80+_qk_int8_pv_bf16"
@@ -1916,6 +1917,9 @@ def _step_timing_finish(
         elapsed_seconds = time.perf_counter() - start_time
 
     configured, backend = _step_backend_label(transformer_options)
+    diagnostics = transformer_options.get('star7_sm80_diagnostics')
+    if diagnostics is not None:
+        diagnostics.step('VEDA-hook' if transformer_options.get('star7_veda_active') else backend, elapsed_seconds, device)
     extra = f" | mode={configured}"
     if configured in HYBRID_BACKEND_NAMES:
         extra += f" | guard_ratio={float(HYBRID_GUARD_RATIO):.4f}"
@@ -2221,6 +2225,9 @@ def _h3_output_finite_passthrough(original_forward, *, aimdo_compat=False):
                 "video/audio muxing; replacing invalid samples would not "
                 "recover the generated content."
             )
+        diagnostics = transformer_options.get('star7_sm80_diagnostics') if transformer_options is not None else None
+        if diagnostics is not None:
+            diagnostics.finite_outputs += 1
         return result
 
     forward._star7_wrapper_kind = "h3-output-finite"
@@ -2255,6 +2262,11 @@ def _minimax_ck_int8_attention_forward(self, x, rope_freqs=None, transformer_opt
         self, x, rope_freqs, mm, comfy.quant_ops, output_dtype=x.dtype,
         compact_query=compact,
     )
+    diagnostics = transformer_options.get('star7_sm80_diagnostics')
+    if diagnostics is not None:
+        diagnostics.observe('CK->VEDA' if transformer_options.get('star7_veda_active') else 'CK',
+                            (q, k, v), int(_CONFIG['effective_qkv_chunk_tokens']),
+                            str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)))
     _log_h3_cuda_memory(
         "after-attention-qkv", x.device,
         block_index=getattr(self, "_star7_block_index", None),
@@ -2443,6 +2455,8 @@ def _minimax_sla_forward(
     star7_sla_mod_segments=(),
 ):
     """Run strict LightX2V-style sparse attention without any fallback."""
+    if transformer_options.get('star7_veda_active'):
+        return _minimax_ck_int8_attention_forward(self, x, rope_freqs, transformer_options)
     if isinstance(x, list):
         x = x.pop()
 
@@ -2467,6 +2481,10 @@ def _minimax_sla_forward(
         self, x, rope_freqs, mm, comfy.quant_ops,
         output_dtype=torch.bfloat16 if sla_bf16 else torch.float16,
     )
+    diagnostics = transformer_options.get('star7_sm80_diagnostics')
+    if diagnostics is not None:
+        diagnostics.observe('SLA', (q, k, v), int(_CONFIG['effective_qkv_chunk_tokens']),
+                            str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)))
     _log_h3_cuda_memory(
         "after-attention-qkv", x.device,
         block_index=getattr(self, "_star7_block_index", None),
@@ -2489,7 +2507,8 @@ def _minimax_sla_forward(
         q, k, v, priority_ranges, layout="BHLD",
     )
     device_index = q.device.index
-    q, k, v = (part.contiguous() for part in (q, k, v))
+    if not q.is_cuda or torch.cuda.get_device_capability(q.device) == (7, 5):
+        q, k, v = (part.contiguous() for part in (q, k, v))
     owned_qkv = [q, k, v]
     del q, k, v
     result = sla_backend.sparse_attention_consume(
@@ -2502,6 +2521,8 @@ def _minimax_sla_forward(
         },
         debug=debug_block,
     )
+    if diagnostics is not None:
+        diagnostics.implementations.add(result.implementation)
     _apply_dense_audio_query_overrides(
         result.output, audio_overrides, layout="BHLD",
     )
@@ -2695,6 +2716,8 @@ def _minimax_sol_forward(
     star7_sla_mod_segments=(),
 ):
     """Run architecture-specific Sol without a silent fallback."""
+    if transformer_options.get('star7_veda_active'):
+        return _minimax_ck_int8_attention_forward(self, x, rope_freqs, transformer_options)
     if isinstance(x, list):
         x = x.pop()
     upstream_dtype = x.dtype
@@ -2747,6 +2770,11 @@ def _minimax_sol_forward(
         try:
             result, audio_overrides = _run_h3_sol_producer(self, x, rope_freqs,
                 sol_backend, producer, audio_ranges, sink_start, sink_tokens, mm, comfy.quant_ops)
+            diagnostics = transformer_options.get('star7_sm80_diagnostics')
+            if diagnostics is not None:
+                diagnostics.producer(x.device, (1, sequence, self.heads, self.head_dim),
+                                     x.dtype, configured_chunk,
+                                     str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)))
         except _SolProducerUnsupported as error:
             producer = None
             key = ("producer-compatibility", str(error))
@@ -2758,6 +2786,10 @@ def _minimax_sol_forward(
         q, k, v = _prepare_h3_qkv_chunked(self, x, rope_freqs, mm, comfy.quant_ops,
             output_dtype=torch.bfloat16 if official else torch.float16,
             output_layout=sol_layout)
+        diagnostics = transformer_options.get('star7_sm80_diagnostics')
+        if diagnostics is not None:
+            diagnostics.observe('Sol-official' if official else 'Sol-INT8', (q, k, v), configured_chunk,
+                                str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)))
         audio_overrides = _sm80plus_audio_query_overrides(q, k, v, audio_ranges, layout=sol_layout)
     del x
     if official and producer is None:
@@ -2784,6 +2816,9 @@ def _minimax_sol_forward(
             sink_start=sink_start,
         )
     _apply_dense_audio_query_overrides(result.output, audio_overrides, layout=sol_layout)
+    diagnostics = transformer_options.get('star7_sm80_diagnostics')
+    if diagnostics is not None:
+        diagnostics.implementations.add(result.implementation)
     if official:
         out = result.output.reshape(1, sequence, self.heads * self.head_dim).squeeze(0)
     else:
@@ -3716,6 +3751,12 @@ def install_model_patch(
     capability = vsa_capability or (
         torch.cuda.get_device_capability() if torch.cuda.is_available() else None
     )
+    if capability and capability >= (8, 0):
+        import comfy.patcher_extension
+        diagnostics = sm80_diagnostics.RunDiagnostics(attention_backend)
+        transformer_options['star7_sm80_diagnostics'] = diagnostics
+        patched.add_callback_with_key(comfy.patcher_extension.CallbacksMP.ON_CLEANUP,
+                                      'star7_sm80_diagnostics', lambda model_patcher: diagnostics.finish())
     if upstream_vsa:
         attention_patch_name = (
             VSA_SM75_BACKEND_NAME
