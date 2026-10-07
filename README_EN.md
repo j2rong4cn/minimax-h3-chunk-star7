@@ -137,15 +137,17 @@ All-in-one Sampling context ----------------^             Video/audio VAEs --^
 
 ### DLSS Neural Image Enhance V2
 
-Place the single model file directly at:
+Put DLSS NR models in `models/upscale_models`. The default file is:
 
 ```text
 ComfyUI/models/upscale_models/nvngx_dlssnr.dll
 ```
 
+The model selector at the top lists the default model and `nvngx_dlssnr*.dll` variants in that directory, including subdirectories. Switching models reinitializes the renderer. Older workflows retain their parameter order and use `nvngx_dlssnr.dll` by default.
+
 The node accepts a single image or a video-frame batch and provides Realistic, Portrait, 3D Anime, 2D Anime, and Custom presets. Custom values are stored in the workflow, and Reset restores the preset defaults.
 
-`Target pixels (MP)` preserves the source aspect ratio and never downsizes when the target is below the input resolution. If the model is missing, the node tries the HF mirror, Hugging Face, and GitHub, then installs it only after verification.
+`Target pixels (MP)` preserves the source aspect ratio and never downsizes when the target is below the input resolution. If the default model is missing, the node tries the HF mirror, Hugging Face, and GitHub, then installs it only after verification. Other selected variants must already exist in the model directory.
 
 `nvngx_dlssnr.dll` provides Neural Rendering. Enlargement combines high-quality resizing with NR at the target size; it is not the complete in-game DLSS Super Resolution rendering pipeline.
 

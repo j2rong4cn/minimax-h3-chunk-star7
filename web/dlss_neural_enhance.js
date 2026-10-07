@@ -2,6 +2,7 @@ import { app } from "/scripts/app.js";
 
 const NODE_NAME = "Star7DLSSNeuralEnhance";
 const CUSTOM = "自定义参数";
+const SERIAL_NAMES = ["风格预设", "目标像素 (MP)", "NR 强度", "局部结构", "局部色调", "皮肤结构", "时序稳定", "自动蒙版", "模型"];
 const PARAMS = ["NR 强度", "局部结构", "局部色调", "皮肤结构", "时序稳定", "自动蒙版"];
 const REALISTIC = {
     "NR 强度": 0.90,
@@ -48,6 +49,11 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function (...args) {
             const result = originalCreated?.apply(this, args);
             const widgets = widgetMap(this);
+            const model = widgets["模型"];
+            if (model) {
+                this.widgets.splice(this.widgets.indexOf(model), 1);
+                this.widgets.unshift(model);
+            }
             const preset = widgets["风格预设"];
             if (!preset) return result;
             if (Array.isArray(preset.options?.values)) {
@@ -114,10 +120,27 @@ app.registerExtension({
             return result;
         };
 
+        const originalSerialize = nodeType.prototype.onSerialize;
+        nodeType.prototype.onSerialize = function (info) {
+            originalSerialize?.call(this, info);
+            const widgets = widgetMap(this);
+            // UI order differs from the append-only backend schema.
+            if (widgets["模型"]) info.widgets_values = SERIAL_NAMES.map(name => widgets[name]?.value);
+        };
         const originalConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (...args) {
             const result = originalConfigure?.apply(this, args);
             const widgets = widgetMap(this);
+            const saved = args[0]?.widgets_values;
+            if (widgets["模型"] && Array.isArray(saved)) {
+                SERIAL_NAMES.forEach((name, index) => {
+                    if (widgets[name] && saved[index] != null) widgets[name].value = saved[index];
+                });
+                if (saved[8] == null) widgets["模型"].value = "nvngx_dlssnr.dll";
+            }
+            if (widgets["模型"] && this.computeSize && this.setSize) {
+                this.setSize([this.size[0], Math.max(this.size[1], this.computeSize([this.size[0], 0])[1])]);
+            }
             const preset = widgets["风格预设"];
             if (preset?.value === "真实风格加强") {
                 preset.value = "真实风格";

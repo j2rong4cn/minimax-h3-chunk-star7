@@ -226,15 +226,17 @@ VDN 节点连接在 H3 模型载入与 Star7 分块节点之间。将完整 DMD8
 
 ### DLSS 神经画质增强 V2
 
-将唯一的模型文件命名为 `nvngx_dlssnr.dll`，直接放入：
+将 DLSS NR 模型放入 `models/upscale_models`，默认文件位置为：
 
 ```text
 ComfyUI/models/upscale_models/nvngx_dlssnr.dll
 ```
 
+节点顶部的「模型」选项显示默认模型及该目录（含子目录）中的 `nvngx_dlssnr*.dll` 变体，切换模型会重新初始化渲染器。旧工作流默认使用 `nvngx_dlssnr.dll`，原有参数位置与设置保持兼容。
+
 节点支持单图和视频帧批次，提供真实风格、真实人像、3D 动漫、2D 动漫和自定义预设。自定义参数会随工作流保存，“重置参数”恢复预设默认值。
 
-“目标像素 (MP)”按原图比例计算输出尺寸，设置低于原图时不会降分辨率。模型缺失时优先从 HF 国内镜像自动下载，再回退到 Hugging Face 和 GitHub，并在校验通过后安装。
+“目标像素 (MP)”按原图比例计算输出尺寸，设置低于原图时不会降分辨率。默认模型缺失时优先从 HF 国内镜像自动下载，再回退到 Hugging Face 和 GitHub，并在校验通过后安装；手动选择的其他模型须已存在于目录中。
 
 该节点使用 `nvngx_dlssnr.dll` 进行 Neural Rendering；放大部分由高质量缩放配合目标尺寸 NR 完成，并非游戏渲染管线中的完整 DLSS Super Resolution。
 

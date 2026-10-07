@@ -89,6 +89,32 @@ class Star7DLSSNRError(RuntimeError):
     pass
 
 
+def _model_options():
+    root = Path(folder_paths.models_dir) / "upscale_models"
+    files = sorted(p.relative_to(root).as_posix() for p in root.rglob("nvngx_dlssnr*.dll") if p.is_file()) if root.is_dir() else []
+    return list(dict.fromkeys(["nvngx_dlssnr.dll", *files]))
+
+
+def _select_model(name):
+    global _MODEL, _INITIALIZED_GPU
+    root = (Path(folder_paths.models_dir) / "upscale_models").resolve()
+    selected = (root / str(name)).resolve()
+    if root not in selected.parents or selected.suffix.lower() != ".dll":
+        raise Star7DLSSNRError("请选择 models/upscale_models 中的 DLSS NR 模型。")
+    if selected == _MODEL.resolve():
+        return
+    if not selected.is_file() and str(name) != "nvngx_dlssnr.dll":
+        raise Star7DLSSNRError(f"所选模型不存在：{name}")
+    if selected.is_file():
+        _validate_model(selected, require_known_hash=False)
+    if _LIB is not None:
+        _LIB.dlss5nr_shutdown()
+        _INITIALIZED_GPU = None
+    _MODEL = selected
+    if _LIB is not None:
+        _prepare_runtime_model()
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -405,7 +431,8 @@ class Star7DLSSNeuralEnhance:
                 "皮肤结构": ("FLOAT", {"default": -1.0, "min": -1.0, "max": 2.0, "step": 0.05}),
                 "时序稳定": ("FLOAT", {"default": 0.55, "min": 0.0, "max": 0.9, "step": 0.05}),
                 "自动蒙版": ("BOOLEAN", {"default": True}),
-            }
+            },
+            "optional": {"模型": (_model_options(), {"default": "nvngx_dlssnr.dll", "tooltip": "DLSS NR 神经模型文件；放在 models/upscale_models。缺失默认文件时沿用现有自动下载机制。"})},
         }
 
     RETURN_TYPES = ("IMAGE",)
@@ -465,6 +492,8 @@ class Star7DLSSNeuralEnhance:
         alpha_output = torch.empty((batch, output_height, output_width, 1), dtype=torch.float32) if channels == 4 else None
         progress = comfy.utils.ProgressBar(batch)
         with _LOCK:
+            _select_model(kwargs.get("模型", "nvngx_dlssnr.dll"))
+            print(f"[INFO] {_LOG} model={_MODEL.name}")
             compute_capability = torch.cuda.get_device_capability()
             library = _ensure_initialized(0)
             # The current NVOF bridge can report present and still fail during execution on

@@ -101,3 +101,31 @@ def test_download_uses_atomic_candidate_and_fallback_sources():
             assert not list(destination.parent.glob("*.candidate"))
         finally:
             module._MODEL, module._MODEL_SOURCES, module._validate_model, module._DOWNLOAD_ERROR = original
+
+
+def test_model_selection_is_visible_and_used_by_runtime():
+    module = _load_module()
+    schema = module.Star7DLSSNeuralEnhance.INPUT_TYPES()
+    assert schema["optional"]["模型"][1]["default"] == "nvngx_dlssnr.dll"
+    with tempfile.TemporaryDirectory() as directory:
+        module.folder_paths.models_dir = directory
+        root = Path(directory)/"upscale_models"
+        root.mkdir()
+        variant = root/"nvngx_dlssnr_variant.dll"
+        variant.write_bytes(b"MZtest")
+        assert "nvngx_dlssnr_variant.dll" in module._model_options()
+        events = []
+        module._LIB = types.SimpleNamespace(dlss5nr_shutdown=lambda: events.append("shutdown"))
+        module._INITIALIZED_GPU = 0
+        module._validate_model = lambda path, require_known_hash: events.append(path.name)
+        module._prepare_runtime_model = lambda: events.append("prepare")
+        module._select_model(variant.name)
+        assert module._MODEL == variant
+        assert module._INITIALIZED_GPU is None
+        assert events == [variant.name, "shutdown", "prepare"]
+        try:
+            module._select_model("../outside.dll")
+        except module.Star7DLSSNRError:
+            pass
+        else:
+            raise AssertionError("Model selector allowed a path outside upscale_models")

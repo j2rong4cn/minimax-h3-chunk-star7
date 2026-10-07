@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.18.3 - 2026-10-07
+
+- Add a visible DLSS NR model selector with support for variants in `models/upscale_models`; switching models reinitializes the renderer.
+- Preserve older workflows, stored parameter order and preset reset behavior. Update the bilingual model instructions.
+
 ## 2.18.2 - 2026-10-07
 
 - Limit VEDA workspaces while preserving SM75 budgets, cache one predictor and bounded layouts, retain low-VRAM head grouping, and report unused overrides in logs.

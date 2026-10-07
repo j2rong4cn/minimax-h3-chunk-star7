@@ -16,6 +16,8 @@ class NodeType {}
 await extension.beforeRegisterNodeDef(NodeType, { name: "Star7DLSSNeuralEnhance" });
 
 const defaults = {
+    "模型": "nvngx_dlssnr.dll",
+    "目标像素 (MP)": 1.0,
     "风格预设": "真实风格",
     "NR 强度": 0.90,
     "局部结构": 0.70,
@@ -35,6 +37,7 @@ node.addWidget = (type, name, value, callback, options) => {
     return widget;
 };
 node.onNodeCreated();
+assert.equal(node.widgets[0].name, "模型");
 
 const widgets = Object.fromEntries(node.widgets.map((widget) => [widget.name, widget]));
 widgets["NR 强度"].value = 0.2;
@@ -57,4 +60,13 @@ node.onConfigure({});
 assert.equal(widgets["风格预设"].value, "真实风格");
 assert.equal(widgets["NR 强度"].value, 0.90);
 
-console.log("DLSS UI reset tests: PASS");
+const oldValues = ["自定义参数", 2, 0.4, 0.6, 0.7, -1, 0.5, false];
+node.onConfigure({widgets_values: oldValues});
+assert.equal(widgets["模型"].value, "nvngx_dlssnr.dll");
+assert.equal(widgets["风格预设"].value, "自定义参数");
+assert.equal(widgets["目标像素 (MP)"].value, 2);
+assert.equal(widgets["NR 强度"].value, 0.4);
+const serialized = {};
+node.onSerialize(serialized);
+assert.deepEqual(Array.from(serialized.widgets_values), [...oldValues, "nvngx_dlssnr.dll"]);
+console.log("DLSS UI model placement, old workflow restore and reset tests: PASS");
