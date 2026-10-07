@@ -119,7 +119,7 @@ const REFERENCE_LOAD_TEXT = {
             video: "参考视频",
             max_long_edge: "最长边限制",
             allow_upscale: "允许小视频放大",
-            trim_enabled: "裁切视频范围",
+            trim_enabled: "裁剪视频范围",
             trim_start_seconds: "开始时间（秒）",
             trim_end_seconds: "结束时间（秒）",
         },

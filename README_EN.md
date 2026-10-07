@@ -1,6 +1,6 @@
 # MiniMax H3 Activation Chunk & Attention Acceleration - Star7
 
-[中文](README.md) · [Benchmarks](BENCHMARKS.md) · [Example workflows](examples/workflows)
+[中文](README.md) · [Benchmarks](BENCHMARKS.md) · [Example workflows](workflows)
 
 The 1006 bilingual examples include: first pass -> optional HD -> optional Face Repair -> Star7 Chunked Decode, with FPS-controlled live previews and VEDA bypassed by default. Select installed models and replace reference-media placeholders.
 
@@ -191,8 +191,8 @@ Restart ComfyUI after installing or updating.
 
 ## Example workflow
 
-- [General workflow - English](examples/workflows/MiniMax-H3-Activation-Chunk-Star7-English.json): fully translated canvas and notes with all-in-one conditioning, chunk acceleration, live preview, independent H3 chunked decode, and optional second-pass refinement disabled by default. It is ready to use as a normal workflow immediately after import.
-- [通用工作流（中文）](examples/workflows/MiniMax-H3-Activation-Chunk-Star7.json): Chinese version with the same features and defaults.
+- [General workflow - English](workflows/MiniMax-H3-Activation-Chunk-Star7-English.json): fully translated canvas and notes with all-in-one conditioning, chunk acceleration, live preview, independent H3 chunked decode, and optional second-pass refinement disabled by default. It is ready to use as a normal workflow immediately after import.
+- [通用工作流（中文）](workflows/MiniMax-H3-Activation-Chunk-Star7.json): Chinese version with the same features and defaults.
 
 ## Recorded 1.0MP / 10-second result
 

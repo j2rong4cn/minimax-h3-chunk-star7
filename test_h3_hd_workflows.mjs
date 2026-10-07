@@ -5,7 +5,7 @@ for (const name of [
     "MiniMax-H3-Activation-Chunk-Star7.json",
     "MiniMax-H3-Activation-Chunk-Star7-English.json",
 ]) {
-    const workflow = JSON.parse(fs.readFileSync(new URL(`./examples/workflows/${name}`, import.meta.url)));
+    const workflow = JSON.parse(fs.readFileSync(new URL(`./workflows/${name}`, import.meta.url)));
     const nodes = new Map(workflow.nodes.map((node) => [node.id, node]));
     const links = new Map(workflow.links.map((link) => [link[0], link]));
     const hd = nodes.get(376);

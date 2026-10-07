@@ -14,7 +14,7 @@ This document records one local Windows/ComfyUI case. It is evidence for configu
 | Case B | 0.6MP portrait, 15 seconds, 24fps, approximately 362 frames |
 | Case C | 0.4MP portrait, 10 seconds, 24fps, approximately 243 frames |
 | Case D | 0.4MP portrait, 5 seconds, 24fps, approximately 124 frames |
-| Reference conditioning | [T8mars/comfyui-minimax-h3-audio-T8](https://github.com/T8mars/comfyui-minimax-h3-audio-T8), one reference image |
+| Reference conditioning | One reference image |
 | DiT | INT8 Tensorwise + ConvRot MiniMax H3 FL2VA |
 | Text encoder | Qwen3-VL 32B MiniMax H3 INT4 ConvRot |
 | Video VAE | MiniMax H3 video VAE INT8 ConvRot |
@@ -123,17 +123,11 @@ removed and is always disabled, so it is no longer a tuning control.
 
 The captured single-reference run showed approximately `16.7 / 22.0GB` dedicated GPU memory, about `13.0 / 15.8GB` shared GPU memory mapped by Windows, approximately 95% GPU utilization, and near-zero Copy-engine activity at the instant of capture.
 
-![RTX 2080 Ti runtime memory](docs/assets/rtx2080ti-runtime-memory.png)
-
 A separate no-reference text-to-video run was reported at approximately 15.6GB dedicated VRAM. These values are snapshots, not peak-memory traces. The data supports “no sustained copy-engine bottleneck was observed”; it does not support a claim that Windows never mapped or accessed shared memory.
-
-![Launcher memory settings](docs/assets/launcher-memory-settings.png)
 
 The “keep models resident in VRAM” option reduces model swapping. It does not disable WDDM shared-memory mapping and should not be described as a zero-shared-memory guarantee.
 
 ## Node settings
-
-![RTX 20-series node settings](docs/assets/node-settings-rtx20.png)
 
 ```text
 chunk_tokens = 8192
@@ -167,8 +161,6 @@ T_r ≈ 10 × (7168 + 80) / (7168r + 80)
 | 0.2 | 47.9s | 4.79× |
 | 0.15 | 62.7s | 6.27× |
 | 0.1 | 91.0s | 9.10× |
-
-![Fixed token-budget duration estimate](docs/assets/token-budget-duration-estimate.png)
 
 This table estimates sequence-budget equivalence. It does not guarantee that the model, VAE, conditioning implementation, or available VRAM supports the listed duration, and it does not predict wall-clock time linearly.
 

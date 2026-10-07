@@ -1,6 +1,6 @@
 # MiniMax H3 Activation Chunk & Attention Acceleration - Star7
 
-[中文说明](#中文说明) · [English](README_EN.md) · [实测记录](BENCHMARKS.md) · [示例工作流](examples/workflows)
+[中文说明](#中文说明) · [English](README_EN.md) · [实测记录](BENCHMARKS.md) · [示例工作流](workflows)
 
 1006 中英文示例包含：一采 → 可选二采高清 → 可选人脸修复 → Star7 分块解码，加入按帧率控制的实时预览及默认旁路的 VEDA。请自行选择已安装的模型并替换参考素材占位文件。
 
@@ -387,8 +387,8 @@ STAR7_SLA_LONG_SELF_TEST=1
 
 ## 示例工作流
 
-- [通用工作流（中文）](examples/workflows/MiniMax-H3-Activation-Chunk-Star7.json)：包含多合一条件载入、分块、实时预览、独立 H3 分块解码和默认关闭的可选二采；导入后可直接作为普通工作流使用。
-- [General workflow (English)](examples/workflows/MiniMax-H3-Activation-Chunk-Star7-English.json)：完整翻译的英文画布与说明版本，功能和默认设置与中文版一致。
+- [通用工作流（中文）](workflows/MiniMax-H3-Activation-Chunk-Star7.json)：包含多合一条件载入、分块、实时预览、独立 H3 分块解码和默认关闭的可选二采；导入后可直接作为普通工作流使用。
+- [General workflow (English)](workflows/MiniMax-H3-Activation-Chunk-Star7-English.json)：完整翻译的英文画布与说明版本，功能和默认设置与中文版一致。
 
 ## License
 
