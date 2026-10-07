@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import sys
 
 import torch
 
@@ -23,8 +24,13 @@ def available(device):
         try:
             root = Path(__file__).parent / 'bin'
             manifest = json.loads((root / 'h3_preprocess_manifest.json').read_text(encoding='utf-8-sig'))
-            path = root / manifest['file']
-            if hashlib.sha256(path.read_bytes()).hexdigest() != manifest['sha256']:
+            platform = 'windows_x64' if sys.platform == 'win32' else 'linux_x86_64'
+            if platform not in manifest:
+                raise RuntimeError(f'No bundled H3 preprocessing library for {platform}')
+
+            entry = manifest[platform]
+            path = root / entry['file']
+            if hashlib.sha256(path.read_bytes()).hexdigest() != entry['sha256']:
                 raise RuntimeError('H3 preprocessing library checksum mismatch')
             lib = ctypes.CDLL(str(path))
             lib.star7_h3_preprocess_abi.restype = ctypes.c_int
