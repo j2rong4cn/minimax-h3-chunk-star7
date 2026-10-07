@@ -5,5 +5,10 @@
     "file": "win_amd64/star7_veda_sm75_v1.dll",
     "sha256": "9f8505625369346b8ea242b52e6fcdb08d5c8a4870725141b5b1d9e48620dbea",
     "size": 793088
+  },
+  "linux_x86_64": {
+    "file": "linux_x86_64/star7_veda_sm75_v1.so",
+    "sha256": "b51ea2cea4063217c0cf815af4262e5e4b596c6f18c97a3b4bb827e8271971be",
+    "size": 2582360
   }
 }

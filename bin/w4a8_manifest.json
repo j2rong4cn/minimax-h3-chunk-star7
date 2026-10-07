@@ -4,5 +4,10 @@
     "size": 1788416,
     "file": "win_amd64/star7_w4a8_sm75_v1.dll"
   },
-  "abi_version": 1
+  "abi_version": 1,
+  "linux_x86_64": {
+    "file": "linux_x86_64/star7_w4a8_sm75_v1.so",
+    "sha256": "aea611f2965edb4b7193f92887ee8eae916793a2b232b62918916316ddc35a3f",
+    "size": 3947184
+  }
 }
