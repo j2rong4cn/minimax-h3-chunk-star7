@@ -1,9 +1,14 @@
 # Changelog
 
+## 2.18.5 - 2026-10-08
+
+- Optimize Windows SM75 Sol kernel occupancy and preprocessing, reducing shared-memory use and QKV copies.
+- Reduce SM80+ Sol copies and add memory-pressure-aware chunked production with full-attention audio protection.
+
 ## 2.18.4 - 2026-10-07
 
 - Reuse full-sequence QKV, MLP and output-projection results on single-chunk paths to reduce buffer allocations and copies.
-- Support three reference-audio inputs in All-in-one Conditioning; show inputs 1 and 2 by default and reveal input 3 when input 2 is connected.
+- Support three reference-audio inputs in All-in-one Conditioning.
 
 ## 2.18.3 - 2026-10-07
 

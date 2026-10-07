@@ -1688,9 +1688,9 @@ def test_sla_backend_is_strict_and_architecture_checked():
     assert chunk_nodes.HYBRID_ALL_INT8_BACKEND_NAME == "hybrid_sm75_ck_sla_all_int8"
     assert chunk_nodes.HYBRID_ALL_INT8_BACKEND_NAME in choices
     expected_sm75 = [
-        backend.SM75_BACKEND_NAME,
-        backend.SM75_ALL_INT8_BACKEND_NAME,
         sol.SOL_SM75_ALL_INT8_BACKEND_NAME,
+        backend.SM75_ALL_INT8_BACKEND_NAME,
+        backend.SM75_BACKEND_NAME,
         chunk_nodes.VSA_SM75_BACKEND_NAME,
         chunk_nodes.HYBRID_ALL_INT8_BACKEND_NAME,
         chunk_nodes.HYBRID_SM75_CK_SOL_ALL_INT8_BACKEND_NAME,

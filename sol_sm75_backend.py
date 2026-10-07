@@ -90,6 +90,24 @@ def _load_library():
         ctypes.c_float, ctypes.c_uint64,
     ]
     launch_all_int8_complete.restype = ctypes.c_int
+    fused = getattr(library, "star7_sol_sm75_prepare_quantized_routes", None)
+    if fused is not None:
+        fused.argtypes = [*([ctypes.c_uint64] * 15), *([ctypes.c_int64] * 9), *([ctypes.c_int] * 4),
+                         ctypes.c_float, ctypes.c_float, ctypes.c_int,
+                         ctypes.c_int, ctypes.c_uint64]
+        fused.restype = ctypes.c_int
+    statistics = getattr(library, "star7_sol_sm75_route_statistics", None)
+    if statistics is not None:
+        statistics.argtypes = [ctypes.c_uint64, ctypes.c_uint64, ctypes.c_int, ctypes.c_uint64]
+        statistics.restype = ctypes.c_int
+    ordered = getattr(library, "star7_sol_sm75_pack_ordered_lut", None)
+    if ordered is not None:
+        ordered.argtypes = [ctypes.c_uint64, ctypes.c_uint64, *([ctypes.c_int] * 3), ctypes.c_uint64]
+        ordered.restype = ctypes.c_int
+    active_blocks = getattr(library, "star7_sol_sm75_active_blocks", None)
+    if active_blocks is not None:
+        active_blocks.argtypes = [ctypes.c_int]
+        active_blocks.restype = ctypes.c_int
     return library
 
 
@@ -101,14 +119,19 @@ def prepare(
     tau: float,
     sink_tokens: int = 0,
     sink_start: int | None = None,
+    quantize_qk: bool = False,
 ):
     """Run SM75 Sol centroids, threshold routing, and LUT packing in CUDA."""
     if q.shape != k.shape or q.shape != v.shape or q.ndim != 4:
         raise ValueError("SM75 Sol preprocessing requires equal [B,H,L,128] Q/K/V")
     if q.dtype != torch.float16 or any(x.dtype != q.dtype for x in (k, v)):
         raise TypeError("SM75 Sol preprocessing requires FP16 Q/K/V")
-    if not all(x.is_cuda and x.is_contiguous() for x in (q, k, v)):
-        raise ValueError("SM75 Sol preprocessing requires contiguous CUDA tensors")
+    library = _load_library()
+    fused = getattr(library, "star7_sol_sm75_prepare_quantized_routes", None) if quantize_qk else None
+    if not all(x.is_cuda and x.device == q.device and x.stride(-1) == 1 for x in (q, k, v)):
+        raise ValueError("SM75 Sol preprocessing requires same-device CUDA tensors with contiguous head dimensions")
+    if fused is None and not all(x.is_contiguous() for x in (q, k, v)):
+        raise ValueError("The installed SM75 Sol preprocessing requires contiguous tensors")
     batch, heads, length, head_dim = q.shape
     if head_dim != HEAD_DIM:
         raise ValueError("SM75 Sol preprocessing requires head_dim=128")
@@ -134,20 +157,40 @@ def prepare(
     else:
         sink_first = blocks
         sink_last = blocks
-    library = _load_library()
     stream = torch.cuda.current_stream(q.device).cuda_stream
-    code = int(library.star7_sol_sm75_prepare_routes(
+    quantized = {}
+    if fused is not None:
+        quantized = {
+            "q_int8": torch.empty(q.shape, dtype=torch.int8, device=q.device),
+            "k_int8": torch.empty(k.shape, dtype=torch.int8, device=k.device),
+            "q_scale": torch.empty((batch, heads, (length + 15) // 16), dtype=torch.float32, device=q.device),
+            "k_scale": torch.empty((batch, heads, blocks), dtype=torch.float32, device=q.device),
+        }
+    extra = [value.data_ptr() for value in quantized.values()]
+    if fused is not None:
+        extra.extend(stride for value in (q, k, v) for stride in value.stride()[:3])
+    prepare_routes = fused or library.star7_sol_sm75_prepare_routes
+    code = int(prepare_routes(
         q.data_ptr(), k.data_ptr(), v.data_ptr(),
         q_centroid.data_ptr(), k_centroid.data_ptr(), v_centroid.data_ptr(),
         k_mean.data_ptr(), k_variance.data_ptr(), threshold.data_ptr(),
         exact_mask.data_ptr(), row_count.data_ptr(),
+        *extra,
         batch, heads, length, padded_blocks, float(tau), head_dim ** -0.5,
         sink_first, sink_last, stream,
     ))
     if code:
         raise RuntimeError(f"SM75 native Sol preprocessing failed with code={code}")
-    minimum = int(row_count.min().item())
-    maximum = int(row_count.max().item())
+    statistics = getattr(library, "star7_sol_sm75_route_statistics", None)
+    if statistics is not None:
+        stats = torch.empty(3, dtype=torch.int64, device=q.device)
+        code = int(statistics(row_count.data_ptr(), stats.data_ptr(), row_count.numel(), stream))
+        if code:
+            raise RuntimeError(f"SM75 Sol route statistics failed with code={code}")
+    else:
+        minimum_gpu, maximum_gpu = torch.aminmax(row_count)
+        stats = torch.stack((minimum_gpu, maximum_gpu, row_count.sum()))
+    minimum, maximum, total = stats.cpu().tolist()
     if minimum <= 0 or maximum > blocks:
         raise RuntimeError(
             f"SM75 native Sol routing produced invalid counts {minimum}..{maximum}"
@@ -156,13 +199,17 @@ def prepare(
         (batch, heads, blocks, maximum), dtype=torch.int32, device=q.device,
     )
     rows = batch * heads * blocks
-    code = int(library.star7_sol_sm75_pack_lut(
-        exact_mask.data_ptr(), row_count.data_ptr(), lut.data_ptr(),
-        rows, blocks, maximum, 0, stream,
-    ))
+    ordered = getattr(library, "star7_sol_sm75_pack_ordered_lut", None)
+    if ordered is not None:
+        code = int(ordered(exact_mask.data_ptr(), lut.data_ptr(), rows, blocks, maximum, stream))
+    else:
+        code = int(library.star7_sol_sm75_pack_lut(
+            exact_mask.data_ptr(), row_count.data_ptr(), lut.data_ptr(),
+            rows, blocks, maximum, 0, stream,
+        ))
     if code:
         raise RuntimeError(f"SM75 native Sol LUT packing failed with code={code}")
-    density = float(row_count.float().mean().item() / blocks)
+    density = total / (rows * blocks)
     return {
         "row_count": row_count,
         "lut": lut,
@@ -174,6 +221,9 @@ def prepare(
         "v_centroid": v_centroid,
         "centroid_count": blocks,
         "centroid_padded": padded_blocks,
+        "validated_routing": ordered is not None,
+        "compact_workspace": getattr(library, "star7_sol_sm75_active_blocks", None) is not None,
+        **quantized,
     }
 
 
@@ -244,6 +294,10 @@ def availability() -> tuple[bool, str]:
     return True, f"native CUDA Q64/K64, 4 warps, shared={shared} bytes"
 
 
+def supports_fused_preprocess() -> bool:
+    return getattr(_load_library(), "star7_sol_sm75_prepare_quantized_routes", None) is not None
+
+
 def run(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -255,6 +309,7 @@ def run(
     *,
     all_int8: bool = False,
     approximation=None,
+    validated_routing: bool = False,
 ) -> torch.Tensor:
     consume_v = isinstance(v, list)
     if consume_v:
@@ -272,8 +327,10 @@ def run(
         raise TypeError("SM75 Sol Q/K scales must be FP32")
     if row_count.dtype != torch.int32 or lut.dtype != torch.int32:
         raise TypeError("SM75 Sol row counts and LUT must be INT32")
-    if any(not tensor.is_contiguous() for tensor in tensors):
+    if any(not tensor.is_contiguous() for tensor in tensors if tensor is not v):
         raise ValueError("SM75 Sol requires contiguous tensors")
+    if not v.is_contiguous() and (not all_int8 or v.stride(-1) != 1):
+        raise ValueError("SM75 Sol FP16-PV requires contiguous V; All-INT8 requires contiguous head dimensions")
 
     batch, heads, length, head_dim = q.shape
     q_blocks = (length + SOL_BLOCK_Q - 1) // SOL_BLOCK_Q
@@ -287,7 +344,7 @@ def run(
     lut_stride = int(lut.shape[-1])
     if lut_stride <= 0 or lut_stride > key_blocks:
         raise ValueError("SM75 Sol LUT stride is invalid")
-    if int(row_count.min().item()) <= 0 or int(row_count.max().item()) > lut_stride:
+    if not validated_routing and (int(row_count.min().item()) <= 0 or int(row_count.max().item()) > lut_stride):
         raise ValueError("SM75 Sol row_count exceeds LUT stride")
     if q_scale.shape != (batch, heads, q_blocks * 4):
         raise ValueError("SM75 Sol Q scale must contain four 16-row scales per Q64 block")

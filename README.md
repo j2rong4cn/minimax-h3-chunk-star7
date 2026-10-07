@@ -57,7 +57,9 @@ SLA 建议配合 [MiniMax H3 Turbo SLA LoRA](https://huggingface.co/lightx2v/Min
 
 Sol 使用 `Q64/K64`、`tau=1.0` 的阈值路由。被选中的 K/V 块执行精确注意力；未命中块不是直接丢弃，而是通过 K/V 质心近似贡献，并与精确块合并到同一次 FP32 online softmax 中。
 
-SM80+ 标准 Sol 模式调用随节点内置的 NVIDIA NVlabs/Sana 官方 BF16 Sol-Attn 接口。SM75 与 SM80+ 的 Star7 All-INT8 路径保留“精确块 + 未命中块质心近似”的完整 Sol 语义，但采用不同的 Q/K/PV 量化和 CUDA/Triton 实现，因此不具备与官方 BF16 路径逐值一致性。
+SM80+ 标准 Sol 模式优先使用 Comfy Kitchen 编译后端，不可用时调用内置 NVIDIA 官方 BF16 接口。SM75 与 SM80+ 的 Star7 All-INT8 路径保留“精确块 + 未命中块质心近似”的完整 Sol 语义，但采用不同的 Q/K/PV 量化和 CUDA/Triton 实现，因此不具备与官方 BF16 路径逐值一致性。
+
+Windows SM75 Sol 使用融合前处理和按 PV 类型分配的共享内存，All-INT8 支持直接消费 QKV 视图。SM80+ 编译后端在布局满足要求时复用输入；标准 Sol 在实际分块且显存紧张时启用 producer，使用当前输入统计量并保留音频完整注意力。旧接口或不支持的投影继续使用直接 Sol 路线，无需新增参数。
 
 SM80+ Sol 保留音频范围的 KV sink，并对参考音频和生成音频查询使用完整注意力结果覆盖；该保护同时适用于官方 BF16、All-INT8 和 Hybrid 中的 Sol 步。
 
@@ -66,8 +68,6 @@ SM80+ Sol 保留音频范围的 KV sink，并对参考音频和生成音频查�
 Hybrid 在完整采样 step 之间切换注意力，而不是在一次 Attention 内混合两套内核。默认前后保护区使用 CK，中间采样阶段使用对应的 SLA、Sol 或 VSA。
 
 以常见 4-step 工作流为例：第 1、4 步使用 CK，第 2、3 步使用所选稀疏模式。Hybrid 需要 ComfyUI 提供真实 sigma 调度上下文；无法可靠确定采样步时将终止任务并报告错误。
-
-RTX 20 系建议配合 [MiniMax H3 FP16 Exact Fix - Star7](https://github.com/star7code/minimax-h3-fp16-exact-star7) 使用。该项目从模型载入阶段采用 FP16 计算，并以 FP32 残差运算和精确溢出保护修复 Turing 上的 FP16 数值问题，可降低长视频中 NaN、棋盘格和音频异常的风险；它不改变注意力后端，也不会把 CK、SLA 或 Sol 的 INT8 计算转换为 FP16。
 
 ## 注意力模式
 
@@ -109,7 +109,7 @@ RTX 20 系建议配合 [MiniMax H3 FP16 Exact Fix - Star7](https://github.com/st
 
 - 追求最高兼容性或保留已有 Sage：选择 `existing`。
 - 通用配置：优先选择 `comfy_kitchen_int8`。
-- SM80+ 默认推荐 BF16；若启动器明确开启 `--fp16-unet`，最新版 Star7 载入节点会安装 FP16 Exact 保护，CK、SLA、Sol 与 Hybrid 均可继续运行。只有未经保护的普通 FP16 会在采样前被拦截并提示检查载入节点与启动参数。
+- SM80+ 的增强载入节点显式使用 BF16，覆盖启动器的全局 `--fp16-unet` 设置。分块节点也支持已有 FP16 Exact 保护的 H3 模型；未经保护的普通 FP16 会在采样前被拦截并提示检查载入节点与启动参数。
 - SM75 使用 SLA：先以 `sla_sm75_qk_int8_pv_fp16` 验证质量，再根据需求测试 All-INT8 或 Hybrid。
 - SM80+ Hybrid 可按需求选择 BF16 标准模式（`hybrid_sm80+_ck_sla_qk_int8_pv_bf16`
   或 `hybrid_sm80+_ck_sol_bf16_official`），也可显式选择新增的 All-INT8
@@ -134,7 +134,7 @@ SM75 的受保护 FP16 W4A8 路线融合 SwiGLU、缩放和转换，减少 FP32 
 - SM75 Windows x64：节点内置预编译 CUDA 13 静态运行时 DLL，需要支持 CUDA 13 的 NVIDIA 580+ 驱动。
 - SM75 Linux x86_64：节点内置 CUDA 12.6 静态运行时 `.so`，面向 Ubuntu 20.04 / glibc 2.31 及更新系统，需要 NVIDIA 525.60.13+ 驱动。
 - SM75 原生库只接收张量地址、形状和当前 CUDA stream，不链接 PyTorch C++ ABI，也不依赖 SageAttention。Turing Triton 不可用时，路由/量化预处理可使用有界显存 PyTorch 路径，核心稀疏注意力仍由原生 CUDA 库执行。
-- VEDA 的 SM75 内核目前仅提供 Windows x64 独立 CUDA DLL，不绑定 Python / PyTorch C++ ABI，无需复制 Python 的 `include`、`libs` 或自行编译；未提供 VEDA SM75 Linux 预编译库。SM80+ 使用上游 Triton。RTX 2080 Ti 已通过内核数值与普通 / CK 调用检查，RTX 2060 仍需实机验证。
+- VEDA 的 SM75 内核仅提供 Windows x64 独立 CUDA DLL，不绑定 Python / PyTorch C++ ABI，无需复制 Python 的 `include`、`libs` 或自行编译；未提供 VEDA SM75 Linux 预编译库。SM80+ 使用上游 Triton。
 - SM80+ SLA 与 All-INT8 路径使用 Triton，首次运行会编译并写入缓存，后续运行复用。
 - SM80+ 官方 BF16 Sol 优先使用 ComfyUI 0.34 `comfy_kitchen.sol_attn` 的已编译后端；该接口不可用时才使用节点内置 NVIDIA Triton 实现。
 - `sol_sm80+_bf16_official` 已内置 NVlabs/Sana `sol-engine` 源码，无需另外安装 Sana。SM80/SM86 使用官方 Triton；支持的 SM89/SM90/SM100/SM120 环境在 CuTe DSL 与 `cuda-python` 可用时使用对应专用内核，否则由官方接口使用 Triton。
@@ -169,7 +169,7 @@ git clone https://github.com/star7code/minimax-h3-chunk-star7.git
 
 | 节点 | 用途 |
 |---|---|
-| `MiniMax H3 增强载入 - Star7` | 分块项目内置的独立 H3 模型载入节点；按 GPU 架构选择受保护 FP16 或原生 BF16，保留量化分发，并使用独立类 ID 避免与 FP16 项目冲突 |
+| `MiniMax H3 增强载入 - Star7` | 本项目内置的 H3 模型载入节点；RTX 20 系使用受保护 FP16，SM80+ 使用原生 BF16，保留模型的量化分发 |
 | `MiniMax H3 VDN 加速 - Star7` | 加载完整 VDN stage，自动安装混合注意力与配套 Adapter；支持 8 步 DMD 和 50 步原始模式 |
 | `MiniMax H3 VEDA 稀疏注意力 - Star7` | 可选的预测器驱动稀疏注意力；支持普通 H3 采样和 CK 分块，SM75 使用独立 CUDA DLL，SM80+ 使用 Triton；关闭时直接透传模型，诊断只写日志 |
 | `MiniMax H3 显存分块加速 - Star7` | QKV/RoPE/MLP 分块、注意力输出显存保护、自动降档和注意力加速选择 |
@@ -190,6 +190,10 @@ git clone https://github.com/star7code/minimax-h3-chunk-star7.git
 VDN 节点连接在 H3 模型载入与 Star7 分块节点之间。将完整 DMD8 stage 放入 `ComfyUI/models/vdn/<模型目录>`；推荐使用 INT8 ConvRot 版。请载入未预先融合 Turbo/其他 LoRA 的 H3 基础模型；VDN 自带配套适配器。分块节点会自动保留 VDN 注意力。
 
 参考图最长边限制支持 `0` 保持原尺寸、`0 < 值 ≤ 10` 按百万像素只缩小，以及大于 `10` 的最长边像素限制；启用比例调整时先裁切后缩小。预览模型可在节点内选择，旧工作流自动恢复参数。高清分格日志逐格记录每轮预测耗时。
+
+### H3 增强载入
+
+本项目已内置 FP16 Exact 精度保护，无需另装 FP16 修复插件。RTX 20 系使用「MiniMax H3 增强载入 - Star7」加载模型，在载入阶段采用 FP16 计算，并安装 FP32 残差运算与溢出保护；SM80+ 使用原生 BF16。增强载入保留 INT8 / ConvRot / W4A8 量化分发，不会把 CK、SLA 或 Sol 的 INT8 注意力计算转换为 FP16。
 
 ### H3 VEDA 稀疏注意力
 
@@ -266,11 +270,11 @@ UNET Loader -> LoRA -> Attention patch（可选）
 RTX 20 系：
 
 ```text
-MiniMax H3 Native FP16 Loader - Star7 -> LoRA
+MiniMax H3 增强载入 - Star7 -> LoRA
     -> Activation Chunk - Star7 -> Guider / Scheduler / Sampler
 ```
 
-FP16 Loader 与 Chunk 是两个可以独立运行的节点。Chunk 不注入 FP16 Exact；SM75 未检测到独立修复节点时输出一次提示，SM80+ 跳过该项检测提示。
+增强载入负责模型精度与保护，分块节点负责 QKV / RoPE / MLP 分块及注意力选择，两者均由本项目提供。
 
 剪枝/T8 H3 可以同时使用原生 8 维 LoRA 与通过 ComfyUI 标准加载器载入的 2688 维完整模型转换版 LoRA。本节点只把尺寸不匹配的完整 AdaLN 增量映射到压缩时间曲线，原生 T8 AdaLN 和其余可匹配权重继续使用 ComfyUI 原路径。原版未转换 Turbo LoRA 仍需其专用加载器；FastH3 VSA 的 `adapter_model.safetensors` 是模型合并原料，不能作为普通 LoRA 加载。
 

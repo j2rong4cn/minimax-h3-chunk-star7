@@ -5,12 +5,15 @@
 #include <mma.h>
 
 #include <cstdint>
+#include <climits>
 
 namespace star7_sol_preprocess {
 
 constexpr int kBlock = 64;
 constexpr int kHeadDim = 128;
 constexpr float kLog2E = 1.4426950408889634f;
+
+struct InputStrides { std::int64_t batch, head, token; };
 
 __device__ __forceinline__ float warp_max(float value) {
 #pragma unroll
@@ -84,6 +87,113 @@ __global__ void reduce_kc_stats(
       fmaxf(square_sum * inverse - average * average, 0.0f);
 }
 
+// Preserve centroid accumulation order and the existing Q16/K64 quantizer.
+__global__ void reduce_quantized_qkv(
+    const half *q, const half *k, const half *v, half *qc, half *kc, half *vc,
+    std::int8_t *q8, std::int8_t *k8, float *qs, float *ks,
+    int heads, int length, int blocks, int padded_blocks,
+    InputStrides q_stride, InputStrides k_stride, InputStrides v_stride) {
+  __shared__ float q_maxima[4][4];
+  __shared__ float k_maxima[4];
+  const int bh = blockIdx.x / padded_blocks;
+  const int block = blockIdx.x % padded_blocks;
+  const int dim = threadIdx.x;
+  const std::int64_t summary =
+      (static_cast<std::int64_t>(bh) * padded_blocks + block) * kHeadDim + dim;
+  if (block >= blocks) {
+    qc[summary] = kc[summary] = vc[summary] = __float2half(0.0f);
+    return;
+  }
+  const int start = block * kBlock;
+  const int count = min(kBlock, length - start);
+  const std::int64_t base = static_cast<std::int64_t>(bh) * length * kHeadDim;
+  const int batch = bh / heads, head = bh % heads;
+  const std::int64_t q_base = batch * q_stride.batch + head * q_stride.head + dim;
+  const std::int64_t k_base = batch * k_stride.batch + head * k_stride.head + dim;
+  const std::int64_t v_base = batch * v_stride.batch + head * v_stride.head + dim;
+  float q_sum = 0.0f, k_sum = 0.0f, v_sum = 0.0f;
+  float q_max[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  float k_max = 0.0f;
+#pragma unroll 1
+  for (int token = 0; token < kBlock; ++token) {
+    if (token < count) {
+      const float q_value = __half2float(q[q_base + (start + token) * q_stride.token]);
+      const float k_value = __half2float(k[k_base + (start + token) * k_stride.token]);
+      q_sum += q_value;
+      k_sum += k_value;
+      v_sum += __half2float(v[v_base + (start + token) * v_stride.token]);
+      q_max[token / 16] = fmaxf(q_max[token / 16], fabsf(q_value));
+      k_max = fmaxf(k_max, fabsf(k_value));
+    }
+  }
+  const float inverse = 1.0f / count;
+  qc[summary] = __float2half_rn(q_sum * inverse);
+  kc[summary] = __float2half_rn(k_sum * inverse);
+  vc[summary] = __float2half_rn(v_sum * inverse);
+  const int lane = dim & 31;
+  const int warp = dim >> 5;
+#pragma unroll
+  for (int group = 0; group < 4; ++group) {
+    const float maximum = warp_max(q_max[group]);
+    if (lane == 0) q_maxima[group][warp] = maximum;
+  }
+  k_max = warp_max(k_max);
+  if (lane == 0) k_maxima[warp] = k_max;
+  __syncthreads();
+  if (warp == 0) {
+#pragma unroll
+    for (int group = 0; group < 4; ++group) {
+      const float maximum = warp_max(lane < 4 ? q_maxima[group][lane] : 0.0f);
+      if (lane == 0) q_maxima[group][0] = fmaxf(maximum / 127.0f, 1.0e-8f);
+    }
+    const float maximum = warp_max(lane < 4 ? k_maxima[lane] : 0.0f);
+    if (lane == 0) k_maxima[0] = fmaxf(maximum / 127.0f, 1.0e-8f);
+  }
+  __syncthreads();
+  const int q_groups = (length + 15) / 16;
+  if (dim < 4 && start + dim * 16 < length)
+    qs[static_cast<std::int64_t>(bh) * q_groups + block * 4 + dim] = q_maxima[dim][0];
+  if (dim == 0) ks[static_cast<std::int64_t>(bh) * blocks + block] = k_maxima[0];
+#pragma unroll 1
+  for (int token = 0; token < kBlock; ++token) {
+    if (token < count) {
+      const std::int64_t index = base + (start + token) * kHeadDim + dim;
+      q8[index] = static_cast<std::int8_t>(max(-127, min(127,
+          __float2int_rn(__half2float(q[q_base + (start + token) * q_stride.token]) / q_maxima[token / 16][0]))));
+      k8[index] = static_cast<std::int8_t>(max(-127, min(127,
+          __float2int_rn(__half2float(k[k_base + (start + token) * k_stride.token]) / k_maxima[0]))));
+    }
+  }
+}
+
+__global__ void route_statistics(const std::int32_t *counts,
+                                 std::int64_t *stats, int rows) {
+  __shared__ std::int64_t totals[256];
+  __shared__ int minima[256], maxima[256];
+  const int lane = threadIdx.x;
+  std::int64_t total = 0;
+  int low = INT_MAX, high = 0;
+  for (int row = lane; row < rows; row += blockDim.x) {
+    const int value = counts[row];
+    total += value;
+    low = min(low, value);
+    high = max(high, value);
+  }
+  totals[lane] = total; minima[lane] = low; maxima[lane] = high;
+  __syncthreads();
+  for (int stride = 128; stride > 0; stride >>= 1) {
+    if (lane < stride) {
+      totals[lane] += totals[lane + stride];
+      minima[lane] = min(minima[lane], minima[lane + stride]);
+      maxima[lane] = max(maxima[lane], maxima[lane + stride]);
+    }
+    __syncthreads();
+  }
+  if (lane == 0) {
+    stats[0] = minima[0]; stats[1] = maxima[0]; stats[2] = totals[0];
+  }
+}
+
 __global__ void compute_diag_threshold(
     const half *__restrict__ qc, const float *__restrict__ kc_mean,
     const float *__restrict__ kc_variance, float *__restrict__ threshold,
@@ -150,15 +260,20 @@ __global__ void route_centroid_tiles(
     const int local_k = item - local_q * 16;
     const int q_block = q_tile * 16 + local_q;
     const int k_block = k_tile * 16 + local_k;
+    bool selected = false;
     if (q_block < q_blocks && k_block < k_blocks) {
       const std::int64_t row = static_cast<std::int64_t>(bh) * q_blocks + q_block;
       const bool neighbor = abs(q_block - k_block) <= 1;
       const bool sink = k_block >= sink_start_block && k_block < sink_end_block;
-      const bool selected = score_tile[item] * scale_log2 > threshold[row] ||
+      selected = score_tile[item] * scale_log2 > threshold[row] ||
           neighbor || sink;
       exact_mask[row * k_blocks + k_block] = selected ? 1 : 0;
-      if (selected) atomicAdd(row_count + row, 1);
     }
+    const unsigned votes = __ballot_sync(0xffffffff, selected);
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    const int count = __popc(votes & (lane < 16 ? 0xffffu : 0xffff0000u));
+    if ((lane & 15) == 0 && q_block < q_blocks && count)
+      atomicAdd(row_count + static_cast<std::int64_t>(bh) * q_blocks + q_block, count);
   }
 #endif
 }
@@ -196,6 +311,24 @@ __global__ void pack_mask_lut(
     // A mismatch indicates an internal packing error.  Poison the count so the
     // Python ABI validation stops before launching attention.
     const_cast<std::int32_t *>(expected_count)[row] = -1;
+  }
+}
+
+__global__ void pack_ordered_lut(
+    const std::uint8_t *mask, std::int32_t *lut, int blocks, int stride) {
+  const int row = blockIdx.x;
+  const int lane = threadIdx.x;
+  int cursor = 0;
+  for (int base = 0; base < blocks; base += 32) {
+    const int key = base + lane;
+    const bool selected = key < blocks && mask[
+        static_cast<std::int64_t>(row) * blocks + key] != 0;
+    const unsigned ballot = __ballot_sync(0xffffffff, selected);
+    if (selected) {
+      const int slot = cursor + __popc(ballot & ((1u << lane) - 1u));
+      if (slot < stride) lut[static_cast<std::int64_t>(row) * stride + slot] = key;
+    }
+    cursor += __popc(ballot);
   }
 }
 
@@ -278,15 +411,24 @@ inline cudaError_t prepare_routes(
     float *kc_mean, float *kc_variance, float *threshold,
     std::uint8_t *exact_mask, std::int32_t *row_count, int batch, int heads,
     int length, int padded_blocks, float tau, float attention_scale,
-    int sink_start_block, int sink_end_block, cudaStream_t stream) {
+    int sink_start_block, int sink_end_block, cudaStream_t stream,
+    std::int8_t *q8 = nullptr, std::int8_t *k8 = nullptr,
+    float *qs = nullptr, float *ks = nullptr,
+    InputStrides q_stride = {}, InputStrides k_stride = {}, InputStrides v_stride = {}) {
   const int blocks = (length + kBlock - 1) / kBlock;
   const int bh = batch * heads;
   cudaError_t error = cudaMemsetAsync(
       row_count, 0, static_cast<std::size_t>(bh) * blocks * sizeof(std::int32_t),
       stream);
   if (error != cudaSuccess) return error;
-  reduce_qkv_centroids<<<bh * padded_blocks, kHeadDim, 0, stream>>>(
-      q, k, v, qc, kc, vc, heads, length, blocks, padded_blocks);
+  if (q8) {
+    reduce_quantized_qkv<<<bh * padded_blocks, kHeadDim, 0, stream>>>(
+        q, k, v, qc, kc, vc, q8, k8, qs, ks, heads, length, blocks, padded_blocks,
+        q_stride, k_stride, v_stride);
+  } else {
+    reduce_qkv_centroids<<<bh * padded_blocks, kHeadDim, 0, stream>>>(
+        q, k, v, qc, kc, vc, heads, length, blocks, padded_blocks);
+  }
   reduce_kc_stats<<<bh, kHeadDim, 0, stream>>>(
       kc, kc_mean, kc_variance, blocks, padded_blocks);
   const float scale_log2 = attention_scale * kLog2E;

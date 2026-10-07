@@ -62,6 +62,8 @@ SLA uses dynamic Top-K block routing. Sol combines exact selected-block contribu
 
 On SM80+, every SLA and Sol mode replaces sparse results for reference- and generated-audio query ranges with full attention computed from the pre-quantization Q/K/V tensors. Video queries remain sparse. Hybrid inherits the same protection during its sparse steps.
 
+Windows SM75 Sol uses fused preprocessing and PV-specific shared-memory sizes; All-INT8 consumes QKV views directly. Standard SM80+ Sol prefers Comfy Kitchen's compiled backend, reusing compatible input layouts, with the bundled NVIDIA BF16 interface as its alternative. Actual multi-chunk workloads under memory pressure use the producer with current-input statistics and full-attention audio protection. Older interfaces and unsupported projections retain direct Sol execution without new parameters.
+
 Sparse attention is not guaranteed to outperform CK at every resolution, duration, or GPU. Compare sampling time under the same model, seed, frame count, step count, and offload policy.
 
 ## W4A8 model support
@@ -78,7 +80,7 @@ Protected FP16 W4A8 on SM75 fuses SwiGLU, rescaling and casting to reduce FP32 i
 
 | Node | Purpose |
 |---|---|
-| `MiniMax H3 Enhanced Loader - Star7` | Independent H3 model loader bundled with this project; selects protected FP16 or native BF16 by GPU architecture, preserves quantized dispatch, and uses a distinct class ID to avoid conflicts with the standalone FP16 project |
+| `MiniMax H3 Enhanced Loader - Star7` | Built-in H3 model loader; uses protected FP16 on RTX 20-series GPUs and native BF16 on SM80+, preserving the checkpoint's quantized dispatch |
 | `MiniMax H3 VDN Acceleration - Star7` | Applies a complete VDN stage with its trained hybrid attention and adapters; supports DMD8 and the 50-step base mode |
 | `MiniMax H3 VEDA Sparse Attention - Star7` | Optional predictor-driven sparse attention for normal H3 sampling and chunked CK; standalone CUDA DLL on SM75, Triton on SM80+; disabled mode passes the model through and diagnostics stay in logs |
 | `MiniMax H3 VRAM Chunk Acceleration - Star7` | QKV/RoPE/MLP chunking, targeted OOM reduction, and attention selection |
@@ -100,6 +102,10 @@ Connected media inputs show their prompt tags: `<Picture N>`, `<Video N>`, and `
 Place the complete DMD8 stage under `ComfyUI/models/vdn/<model folder>` and connect VDN between the H3 model loader and the Star7 chunk node. The INT8 ConvRot stage is recommended. Use an H3 base without Turbo or other LoRAs already fused in; VDN applies its own trained adapters. The chunk node preserves VDN attention automatically.
 
 Reference-image limits accept `0` to preserve source size, `0 < value <= 10` as a downscale-only megapixel cap, and larger values as a pixel long-edge cap. Cropping precedes resizing. Preview decoders are selectable, existing workflow values are restored automatically, and tiled HD logs report each tile prediction.
+
+### H3 Enhanced Loader
+
+FP16 Exact protection is bundled with this project; no separate FP16 repair plugin is required. On RTX 20-series GPUs, load the model with `MiniMax H3 Enhanced Loader - Star7` to use FP16 compute with FP32 residual operations and overflow protection. SM80+ uses native BF16. The loader preserves INT8 / ConvRot / W4A8 dispatch and does not convert CK/SLA/Sol INT8 attention calculations to FP16.
 
 ### H3 VEDA Sparse Attention
 
@@ -180,8 +186,6 @@ handles recoverable QKV, RoPE, and MLP chunk OOMs; the second handles only the
 attention `out_proj` peak. Retired prefetch values in older workflows migrate
 to Auto, and the internal fallback tile is not exposed in the UI.
 
-For RTX 20-series GPUs, pair this project with [MiniMax H3 FP16 Exact Fix - Star7](https://github.com/star7code/minimax-h3-fp16-exact-star7). It adds FP16 numerical protection without converting CK/SLA/Sol INT8 attention calculations to FP16.
-
 Compressed/T8 H3 checkpoints can stack native 8-wide LoRAs with converted full-model 2688-wide LoRAs loaded through ComfyUI's standard LoRA node. The chunk node maps only incompatible full-width AdaLN contributions through the compressed time curve and leaves native T8 and compatible backbone patches unchanged. An unconverted original Turbo LoRA still requires its dedicated loader; FastH3 VSA `adapter_model.safetensors` is conversion input rather than a runtime LoRA.
 
 ## Installation
@@ -226,11 +230,11 @@ These are observations from one local configuration, not cross-GPU performance g
 
 - SM75 Windows x64 ships with a CUDA 13 static-runtime DLL and requires an NVIDIA 580+ driver.
 - SM75 Linux x86_64 ships with a CUDA 12.6 static-runtime `.so`, targets Ubuntu 20.04 / glibc 2.31 or newer, and requires driver 525.60.13+.
-- VEDA SM75 kernels currently ship only as standalone Windows x64 CUDA DLLs, without Python / PyTorch C++ ABI linkage or local compilation requirements. No VEDA SM75 Linux binary is bundled. SM80+ uses upstream Triton. RTX 2080 Ti kernel numerical and normal / CK integration checks passed; RTX 2060 still requires device testing.
+- VEDA SM75 kernels ship only as standalone Windows x64 CUDA DLLs, without Python / PyTorch C++ ABI linkage or local compilation requirements. No VEDA SM75 Linux binary is bundled. SM80+ uses upstream Triton.
 - SM80+ SLA paths use Triton and compile/cache kernels on first use.
 - Official BF16 Sol first uses ComfyUI 0.34's compiled `comfy_kitchen.sol_attn`
   dispatcher when available, then falls back to the bundled NVIDIA Triton path.
-- BF16 remains the default on SM80+. If the launcher explicitly enables `--fp16-unet`, the latest Star7 loader installs FP16 Exact protection so CK, SLA, Sol, and Hybrid can continue. Only ordinary unprotected FP16 is rejected before sampling with a clear loader/launcher diagnostic.
+- On SM80+, Enhanced Loader explicitly uses BF16, overriding the launcher's global `--fp16-unet` setting. Chunk also accepts H3 models with existing FP16 Exact protection; unprotected FP16 is rejected before sampling with a loader/launcher diagnostic.
 - The official SM80+ Sol mode bundles the relevant NVlabs/Sana `sol-engine` source.
 - Strict SLA/Sol/Hybrid modes stop on architecture, environment, self-test, or computation failures; they do not silently fall back to CK or Sage.
 - NaN/Inf guards detect and locate invalid output. They do not replace invalid values with zero and are not an FP16 repair mechanism.

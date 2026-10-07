@@ -37,6 +37,19 @@ constexpr int kSolWarps =
 constexpr int kSolShared =
     (kSolCtaQ + kSolCtaK) * kHeadDim * sizeof(int8_t) +
     kSolCtaK * kHeadDim * sizeof(half) + 128;
+constexpr int kSolFp16Shared =
+    (kSolCtaQ + kSolCtaK) * kHeadDim + kSolCtaK * kHeadDim * sizeof(half);
+constexpr int kSolInt8Shared =
+    (kSolCtaQ + kSolCtaK) * kHeadDim + kSolCtaK * kHeadDim;
+
+template <typename Kernel>
+cudaError_t configure_sol_kernel(Kernel kernel, int shared) {
+  cudaError_t error = cudaFuncSetAttribute(
+      kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, shared);
+  if (error != cudaSuccess) return error;
+  return cudaFuncSetAttribute(
+      kernel, cudaFuncAttributePreferredSharedMemoryCarveout, cudaSharedmemCarveoutMaxShared);
+}
 } // namespace
 
 STAR7_EXPORT int star7_sla_sm75_abi_version() { return 7; }
@@ -183,7 +196,26 @@ STAR7_EXPORT int star7_sla_sm75_launch_all_int8(
   return error == cudaSuccess ? 0 : 5000 + static_cast<int>(error);
 }
 
-STAR7_EXPORT int star7_sol_sm75_shared_bytes() { return kSolShared; }
+STAR7_EXPORT int star7_sol_sm75_shared_bytes() { return kSolFp16Shared; }
+
+STAR7_EXPORT int star7_sol_sm75_active_blocks(int all_int8) {
+  int blocks = 0;
+  cudaError_t error;
+  if (all_int8) {
+    auto kernel = star7_sm75_sparse_qk_i8_pv_f16<
+        kSolCtaQ, kSolCtaK, kSolWarpQ, kSolWarpK, kHeadDim, true, true>;
+    error = configure_sol_kernel(kernel, kSolInt8Shared);
+    if (error == cudaSuccess) error = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks, kernel, 32 * kSolWarps, kSolInt8Shared);
+  } else {
+    auto kernel = star7_sm75_sparse_qk_i8_pv_f16<
+        kSolCtaQ, kSolCtaK, kSolWarpQ, kSolWarpK, kHeadDim, true>;
+    error = configure_sol_kernel(kernel, kSolFp16Shared);
+    if (error == cudaSuccess) error = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &blocks, kernel, 32 * kSolWarps, kSolFp16Shared);
+  }
+  return error == cudaSuccess ? blocks : -static_cast<int>(error);
+}
 
 STAR7_EXPORT int star7_sol_sm75_prepare_routes(
     std::uintptr_t q, std::uintptr_t k, std::uintptr_t v,
@@ -214,6 +246,65 @@ STAR7_EXPORT int star7_sol_sm75_prepare_routes(
       padded_blocks, tau, attention_scale, sink_start_block, sink_end_block,
       reinterpret_cast<cudaStream_t>(stream));
   return error == cudaSuccess ? 0 : 10000 + static_cast<int>(error);
+}
+
+STAR7_EXPORT int star7_sol_sm75_prepare_quantized_routes(
+    std::uintptr_t q, std::uintptr_t k, std::uintptr_t v,
+    std::uintptr_t qc, std::uintptr_t kc, std::uintptr_t vc,
+    std::uintptr_t mean, std::uintptr_t variance, std::uintptr_t threshold,
+    std::uintptr_t mask, std::uintptr_t count,
+    std::uintptr_t q8, std::uintptr_t k8, std::uintptr_t qs, std::uintptr_t ks,
+    std::int64_t qb, std::int64_t qh, std::int64_t qt,
+    std::int64_t kb, std::int64_t kh, std::int64_t kt,
+    std::int64_t vb, std::int64_t vh, std::int64_t vt,
+    int batch, int heads, int length, int padded_blocks,
+    float tau, float scale, int sink_first, int sink_last,
+    std::uintptr_t stream) {
+  const int blocks = (length + 63) / 64;
+  if (!q || !k || !v || !qc || !kc || !vc || !mean || !variance ||
+      !threshold || !mask || !count || !q8 || !k8 || !qs || !ks ||
+      batch <= 0 || heads <= 0 || length <= 0 || padded_blocks < blocks ||
+      padded_blocks % 16 != 0 || tau < 0.0f || sink_first < 0 ||
+      sink_last < sink_first || sink_last > blocks)
+    return static_cast<int>(cudaErrorInvalidValue);
+  const cudaError_t error = star7_sol_preprocess::prepare_routes(
+      reinterpret_cast<const half *>(q), reinterpret_cast<const half *>(k),
+      reinterpret_cast<const half *>(v), reinterpret_cast<half *>(qc),
+      reinterpret_cast<half *>(kc), reinterpret_cast<half *>(vc),
+      reinterpret_cast<float *>(mean), reinterpret_cast<float *>(variance),
+      reinterpret_cast<float *>(threshold), reinterpret_cast<std::uint8_t *>(mask),
+      reinterpret_cast<std::int32_t *>(count), batch, heads, length,
+      padded_blocks, tau, scale, sink_first, sink_last,
+      reinterpret_cast<cudaStream_t>(stream),
+      reinterpret_cast<std::int8_t *>(q8), reinterpret_cast<std::int8_t *>(k8),
+      reinterpret_cast<float *>(qs), reinterpret_cast<float *>(ks),
+      {qb, qh, qt}, {kb, kh, kt}, {vb, vh, vt});
+  return error == cudaSuccess ? 0 : 14000 + static_cast<int>(error);
+}
+
+STAR7_EXPORT int star7_sol_sm75_route_statistics(
+    std::uintptr_t counts, std::uintptr_t stats, int rows,
+    std::uintptr_t stream) {
+  if (!counts || !stats || rows <= 0) return static_cast<int>(cudaErrorInvalidValue);
+  star7_sol_preprocess::route_statistics<<<1, 256, 0,
+      reinterpret_cast<cudaStream_t>(stream)>>>(
+      reinterpret_cast<const std::int32_t *>(counts),
+      reinterpret_cast<std::int64_t *>(stats), rows);
+  const cudaError_t error = cudaPeekAtLastError();
+  return error == cudaSuccess ? 0 : 15000 + static_cast<int>(error);
+}
+
+STAR7_EXPORT int star7_sol_sm75_pack_ordered_lut(
+    std::uintptr_t mask, std::uintptr_t lut, int rows, int blocks,
+    int stride, std::uintptr_t stream) {
+  if (!mask || !lut || rows <= 0 || blocks <= 0 || stride <= 0 || stride > blocks)
+    return static_cast<int>(cudaErrorInvalidValue);
+  star7_sol_preprocess::pack_ordered_lut<<<rows, 32, 0,
+      reinterpret_cast<cudaStream_t>(stream)>>>(
+      reinterpret_cast<const std::uint8_t *>(mask),
+      reinterpret_cast<std::int32_t *>(lut), blocks, stride);
+  const cudaError_t error = cudaPeekAtLastError();
+  return error == cudaSuccess ? 0 : 16000 + static_cast<int>(error);
 }
 
 STAR7_EXPORT int star7_sol_sm75_pack_lut(
@@ -281,14 +372,13 @@ STAR7_EXPORT int star7_sol_sm75_launch(
   }
   auto kernel = star7_sm75_sparse_qk_i8_pv_f16<
       kSolCtaQ, kSolCtaK, kSolWarpQ, kSolWarpK, kHeadDim, true>;
-  cudaError_t error = cudaFuncSetAttribute(
-      kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSolShared);
+  cudaError_t error = configure_sol_kernel(kernel, kSolFp16Shared);
   if (error != cudaSuccess) return 6000 + static_cast<int>(error);
   const int stride_h = length * kHeadDim;
   const int stride_b = heads * stride_h;
   dim3 grid(q_blocks, heads, batch);
   dim3 block(32, kSolWarps);
-  kernel<<<grid, block, kSolShared, reinterpret_cast<cudaStream_t>(stream)>>>(
+  kernel<<<grid, block, kSolFp16Shared, reinterpret_cast<cudaStream_t>(stream)>>>(
       reinterpret_cast<int8_t *>(q), reinterpret_cast<int8_t *>(k),
       reinterpret_cast<half *>(v), reinterpret_cast<half *>(output),
       reinterpret_cast<float *>(q_scale), reinterpret_cast<float *>(k_scale),
@@ -406,14 +496,13 @@ STAR7_EXPORT int star7_sol_sm75_launch_all_int8_complete(
   }
   auto kernel = star7_sm75_sparse_qk_i8_pv_f16<
       kSolCtaQ, kSolCtaK, kSolWarpQ, kSolWarpK, kHeadDim, true, true>;
-  cudaError_t error = cudaFuncSetAttribute(
-      kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, kSolShared);
+  cudaError_t error = configure_sol_kernel(kernel, kSolInt8Shared);
   if (error != cudaSuccess) return 14000 + static_cast<int>(error);
   const int stride_h = length * kHeadDim;
   const int stride_b = heads * stride_h;
   dim3 grid(q_blocks, heads, batch);
   dim3 block(32, kSolWarps);
-  kernel<<<grid, block, kSolShared, reinterpret_cast<cudaStream_t>(stream)>>>(
+  kernel<<<grid, block, kSolInt8Shared, reinterpret_cast<cudaStream_t>(stream)>>>(
       reinterpret_cast<int8_t *>(q), reinterpret_cast<int8_t *>(k), nullptr,
       reinterpret_cast<half *>(output), reinterpret_cast<float *>(q_scale),
       reinterpret_cast<float *>(k_scale), reinterpret_cast<const int32_t *>(lut),

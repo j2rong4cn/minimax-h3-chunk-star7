@@ -22,7 +22,7 @@ except ImportError:
     import h3_preprocess
 
 _LOG = logging.getLogger("MiniMaxH3ActivationChunkStar7")
-NODE_VERSION = "2.18.4"
+NODE_VERSION = "2.18.5"
 FP16_EXACT_PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 HYBRID_ALL_INT8_BACKEND_NAME = "hybrid_sm75_ck_sla_all_int8"
 SM86PLUS_BACKEND_NAME = "sla_sm80+_qk_int8_pv_bf16"
@@ -154,9 +154,9 @@ def _strip_conflicting_instance_forwards(diffusion_model):
 def _attention_backend_choices():
     common = ["existing", "comfy_kitchen_int8"]
     sm75 = [
-        "sla_sm75_qk_int8_pv_fp16",
-        SM75_ALL_INT8_BACKEND_NAME,
         SOL_SM75_ALL_INT8_BACKEND_NAME,
+        SM75_ALL_INT8_BACKEND_NAME,
+        "sla_sm75_qk_int8_pv_fp16",
         VSA_SM75_BACKEND_NAME,
         HYBRID_ALL_INT8_BACKEND_NAME,
         HYBRID_SM75_CK_SOL_ALL_INT8_BACKEND_NAME,
@@ -2562,6 +2562,134 @@ def _minimax_sla_forward(
 _minimax_sla_forward._star7_consumes_input = True
 
 
+class _SolProducerUnsupported(RuntimeError):
+    pass
+
+
+class _StreamingDenseAudio:
+    """Bounded full-KV attention for protected audio queries."""
+
+    def __init__(self, queries):
+        self.queries = queries
+        self.output = torch.zeros_like(queries, dtype=torch.float32)
+        self.lse = torch.full(queries.shape[:-1], -float("inf"),
+                              dtype=torch.float32, device=queries.device)
+
+    def update(self, keys, values):
+        scale = self.queries.shape[-1] ** -0.5
+        for start in range(0, self.queries.shape[-2], 64):
+            end = min(start + 64, self.queries.shape[-2])
+            query = self.queries[:, :, start:end]
+            if query.is_cuda:
+                output, lse, *_ = torch.ops.aten._scaled_dot_product_flash_attention(
+                    query, keys, values, dropout_p=0.0, is_causal=False, scale=scale)
+            else:
+                scores = query.float() @ keys.float().transpose(-1, -2) * scale
+                lse = torch.logsumexp(scores, dim=-1)
+                output = torch.softmax(scores, dim=-1) @ values.float()
+            previous = self.lse[:, :, start:end]
+            combined = torch.logaddexp(previous, lse)
+            merged = (self.output[:, :, start:end] * torch.exp(previous - combined)[..., None]
+                      + output.float() * torch.exp(lse - combined)[..., None])
+            self.output[:, :, start:end].copy_(merged)
+            previous.copy_(combined)
+
+
+def _run_h3_sol_producer(self, x, rope_freqs, backend, producer, audio_ranges,
+                         sink_start, sink_tokens, mm, quant_ops):
+    sequence, heads, dim = x.shape[0], self.heads, self.head_dim
+    chunk = min(sequence, max(256, int(_CONFIG["effective_qkv_chunk_tokens"])))
+    norm_weights = (mm.cast_to(self.q_norm.weight, device=x.device),
+                    mm.cast_to(self.k_norm.weight, device=x.device))
+    rope_fn = _ORIGINAL_RMS_ROPE_SPLIT_HALF_INPLACE or quant_ops.ck.rms_rope_split_half_
+    rot = rope_freqs.shape[-3] * 2
+    ranges = _merge_token_ranges(audio_ranges, sequence)
+    audio = None
+    query_parts = []
+    passes = 0
+    chunk_failed = False
+
+    def chunks():
+        nonlocal passes, audio, chunk_failed
+        passes += 1
+        start = 0
+        while start < sequence:
+            end = min(start + chunk, sequence)
+            try:
+                raw = self.qkv_proj(x[start:end])
+                if raw.dtype != torch.bfloat16:
+                    raise _SolProducerUnsupported(f"QKV projection dtype={raw.dtype}, expected BF16")
+                if raw.shape != (end - start, 3 * heads * dim):
+                    raise RuntimeError("SM80+ Sol producer received an invalid H3 QKV projection shape")
+                _debug_sla_tensor("Sol producer QKV", raw, getattr(self, "_star7_block_index", None), row_dim=0)
+                if passes == 1:
+                    selected = [torch.arange(max(start, a), min(end, b), device=x.device)
+                                for a, b in ranges if a < end and b > start]
+                    if selected:
+                        indices = torch.cat(selected)
+                        # Select AFTER projection: tensorwise activation scales
+                        # must match the video-containing projection chunk.
+                        query = raw[:, :heads * dim].index_select(0, indices - start).view(1, -1, heads, dim)
+                        unused_key = torch.zeros_like(query)
+                        rope_fn(query, unused_key, rope_freqs.index_select(1, indices), *norm_weights,
+                                epsilon=self.q_norm.eps, rot_dim=rot)
+                        query_parts.append(query.transpose(1, 2).contiguous())
+                        del query, unused_key, indices, selected
+                elif audio is not None:
+                    key = raw[:, heads * dim:2 * heads * dim].contiguous().view(1, end - start, heads, dim)
+                    unused_query = torch.zeros_like(key)
+                    rope_fn(unused_query, key, rope_freqs[:, start:end], *norm_weights,
+                            epsilon=self.q_norm.eps, rot_dim=rot)
+                    value = raw[:, 2 * heads * dim:].view(1, end - start, heads, dim)
+                    audio.update(key.transpose(1, 2), value.transpose(1, 2))
+                    del key, unused_query, value
+            except Exception:
+                chunk_failed = True
+                raise
+            yield raw
+            del raw
+            start = end
+        if passes == 1 and ranges:
+            queries = torch.cat(query_parts, dim=2)
+            if queries.shape[2] != sum(end - start for start, end in ranges):
+                raise RuntimeError("SM80+ Sol producer did not collect all protected audio queries")
+            audio = _StreamingDenseAudio(queries)
+            query_parts.clear()
+
+    _set_sequence_status("QKV", sequence)
+    while True:
+        try:
+            result = backend.run_chunked(producer, chunks, sequence, heads, rope_freqs,
+                norm_weights, epsilon=self.q_norm.eps, tau=backend.DEFAULT_TAU,
+                sink_start=sink_start, sink_tokens=sink_tokens)
+            break
+        except Exception as error:
+            if not (chunk_failed and _is_cuda_oom(error) and _CONFIG["auto_halve_on_oom"] and chunk > 256):
+                raise
+            reduced = max(256, (chunk // 2) // 64 * 64)
+            _remember_effective_chunk("QKV", chunk, reduced)
+            chunk = reduced
+            # Restart both passes so audio queries and quantization statistics
+            # use the same new projection boundaries. Fixed workspace OOMs do
+            # not trigger projection downshift.
+            audio = None
+            query_parts.clear()
+            passes = 0
+            chunk_failed = False
+            error.__traceback__ = None
+            _clear_cuda_after_oom(x.device)
+    if passes != 2:
+        raise _SolProducerUnsupported("producer does not use two current-statistics passes")
+    overrides = []
+    if audio is not None:
+        offset = 0
+        output = audio.output.to(x.dtype).transpose(1, 2)
+        for start, end in ranges:
+            overrides.append((start, end, output[:, offset:offset + end - start]))
+            offset += end - start
+    return result, overrides
+
+
 def _minimax_sol_forward(
     self, x, rope_freqs=None, transformer_options={},
     star7_sla_mod_segments=(),
@@ -2589,16 +2717,6 @@ def _minimax_sol_forward(
     import comfy.quant_ops
 
     sol_backend = _load_sol_backend()
-    q, k, v = _prepare_h3_qkv_chunked(
-        self,
-        x,
-        rope_freqs,
-        mm,
-        comfy.quant_ops,
-        output_dtype=torch.bfloat16 if official else torch.float16,
-        output_layout="BTHD" if official else "BHLD",
-    )
-    del x
     segments = star7_sla_mod_segments or getattr(
         self, "_star7_sla_mod_segments", ()
     )
@@ -2611,26 +2729,50 @@ def _minimax_sol_forward(
 
     audio_ranges = _h3_audio_token_ranges(segments)
     sol_layout = "BTHD" if official else "BHLD"
-    audio_overrides = _sm80plus_audio_query_overrides(
-        q, k, v, audio_ranges, layout=sol_layout,
-    )
-
-    if official:
-        q, k, v = (part.contiguous() for part in (q, k, v))
+    configured_chunk = int(_CONFIG["effective_qkv_chunk_tokens"])
+    use_producer = (official and x.is_cuda and x.dtype == torch.bfloat16
+                    and torch.cuda.get_device_capability(x.device) >= (8, 0)
+                    and not getattr(mm, "in_training", False) and rope_freqs is not None
+                    and self.head_dim == 128 and 0 < configured_chunk < sequence
+                    and configured_chunk % 64 == 0
+                    and rope_freqs.shape[-3] * 2 % 8 == 0
+                    and getattr(self.q_norm, "weight", None) is not None
+                    and getattr(self.k_norm, "weight", None) is not None
+                    and self.q_norm.weight.dtype == torch.bfloat16
+                    and self.k_norm.weight.dtype == torch.bfloat16
+                    and (not audio_ranges or torch.backends.cuda.flash_sdp_enabled())
+                    and h3_preprocess.memory_pressure(x, self.heads))
+    producer = sol_backend.chunked_producer(x.device) if use_producer else None
+    if producer is not None:
+        try:
+            result, audio_overrides = _run_h3_sol_producer(self, x, rope_freqs,
+                sol_backend, producer, audio_ranges, sink_start, sink_tokens, mm, comfy.quant_ops)
+        except _SolProducerUnsupported as error:
+            producer = None
+            key = ("producer-compatibility", str(error))
+            if key not in _LOGGED_SOL_SHAPES:
+                _LOGGED_SOL_SHAPES.add(key)
+                _LOG.warning("[Star7 H3 Chunk] Sol producer bypassed; using direct Sol: %s", error)
+            error.__traceback__ = None
+    if producer is None:
+        q, k, v = _prepare_h3_qkv_chunked(self, x, rope_freqs, mm, comfy.quant_ops,
+            output_dtype=torch.bfloat16 if official else torch.float16,
+            output_layout=sol_layout)
+        audio_overrides = _sm80plus_audio_query_overrides(q, k, v, audio_ranges, layout=sol_layout)
+    del x
+    if official and producer is None:
         result = sol_backend.run_official(
             q, k, v,
             tau=sol_backend.DEFAULT_TAU,
             sink_tokens=sink_tokens,
             sink_start=sink_start,
         )
-        _apply_dense_audio_query_overrides(
-            result.output, audio_overrides, layout="BTHD",
-        )
-        out = result.output.reshape(
-            1, sequence, self.heads * self.head_dim
-        ).squeeze(0)
-    else:
-        q, k, v = (part.contiguous() for part in (q, k, v))
+    elif not official:
+        capability = torch.cuda.get_device_capability(q.device) if q.is_cuda else (0, 0)
+        strided_sol = all_int8 and (capability >= (8, 0) or
+            (capability == (7, 5) and sol_backend._load_sm75_backend().supports_fused_preprocess()))
+        if not strided_sol:
+            q, k, v = (part.contiguous() for part in (q, k, v))
         owned_qkv = [q, k, v]
         del q, k, v
         result = sol_backend.run_custom_consume(
@@ -2641,9 +2783,10 @@ def _minimax_sol_forward(
             sink_tokens=sink_tokens,
             sink_start=sink_start,
         )
-        _apply_dense_audio_query_overrides(
-            result.output, audio_overrides, layout="BHLD",
-        )
+    _apply_dense_audio_query_overrides(result.output, audio_overrides, layout=sol_layout)
+    if official:
+        out = result.output.reshape(1, sequence, self.heads * self.head_dim).squeeze(0)
+    else:
         out = result.output.transpose(1, 2).reshape(
             1, sequence, self.heads * self.head_dim
         ).squeeze(0)

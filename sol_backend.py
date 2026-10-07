@@ -10,6 +10,7 @@ and experimental All-INT8 differ only in PV quantization, not Sol semantics.
 from __future__ import annotations
 
 import importlib
+import inspect
 import os
 import sys
 from dataclasses import dataclass
@@ -119,6 +120,13 @@ def _comfy_kitchen_sol_attn(device):
                 return None
         except Exception:
             return None
+    else:
+        try:
+            from comfy_kitchen.backends import cuda
+            if not getattr(cuda, "_EXT_AVAILABLE", False) or not hasattr(getattr(cuda, "_C", None), "sol_attn"):
+                return None
+        except ImportError:
+            return None
     return sol_attn
 
 
@@ -157,8 +165,9 @@ def check_runtime_support(
                 f"SM{capability[0]}{capability[1]}. No fallback was attempted."
             )
         if requested_backend == SOL_SM86PLUS_BACKEND_NAME:
-            official = _official_module()
-            official.get_sol_attn_backend(device)
+            if _comfy_kitchen_sol_attn(device) is None:
+                official = _official_module()
+                official.get_sol_attn_backend(device)
         else:
             sla = _load_sla_backend()
             if sla.triton is None:
@@ -183,10 +192,12 @@ def run_official(
         raise TypeError("official SM80+ Sol requires BF16 Q/K/V")
     if q.shape[-1] != HEAD_DIM:
         raise ValueError("official Sol requires head_dim=128")
-    if not (q.is_contiguous() and k.is_contiguous() and v.is_contiguous()):
-        raise ValueError("official Sol requires contiguous BTHD tensors")
     native_sol = _comfy_kitchen_sol_attn(q.device)
     if native_sol is not None:
+        if _kitchen_sol_supports_strides():
+            q, k, v = (_kitchen_sol_input(part) for part in (q, k, v))
+        else:
+            q, k, v = (_kitchen_sol_input(part).contiguous() for part in (q, k, v))
         sink_first = 0
         sink_last = 0
         if sink_tokens:
@@ -216,6 +227,7 @@ def run_official(
         )
         implementation = "comfy-kitchen-sol-attn"
     else:
+        q, k, v = (_kitchen_sol_input(part).contiguous() for part in (q, k, v))
         official = _official_module()
         output = official.sol_attn(
             q,
@@ -239,6 +251,59 @@ def run_official(
         implementation=implementation,
         routing_tau=float(tau),
     )
+
+
+def _kitchen_sol_input(value):
+    aligned = (value.stride(-1) == 1 and value.data_ptr() % 16 == 0
+               and all(size <= 1 or stride % 8 == 0
+                       for size, stride in zip(value.shape[:3], value.stride()[:3])))
+    # A contiguous slice can still have a misaligned storage offset; in that
+    # case contiguous() is a no-op and a clone is necessary.
+    return value if aligned else value.clone(memory_format=torch.contiguous_format)
+
+
+def _kitchen_sol_supports_strides():
+    from comfy_kitchen.backends import cuda
+    # New Kitchen wrappers explicitly validate strides and pointer alignment.
+    # Older/frozen wrappers without that contract retain contiguous inputs.
+    names = getattr(getattr(getattr(cuda, "sol_attn", None), "__code__", None), "co_names", ())
+    return "stride" in names and "data_ptr" in names
+
+
+def chunked_producer(device):
+    if _comfy_kitchen_sol_attn(device) is None:
+        return None
+    import comfy_kitchen
+    from comfy_kitchen.backends import cuda
+    function = getattr(comfy_kitchen, "sol_attn_chunked", None)
+    extension = getattr(cuda, "_C", None)
+    symbols = ("sol_attn_plan", "sol_producer_begin", "sol_producer_chunk", "sol_attn_core")
+    if not callable(function) or not all(hasattr(extension, name) for name in symbols):
+        return None
+    try:
+        parameters = inspect.signature(function).parameters
+    except (TypeError, ValueError):
+        return None
+    required = {"kmean", "vscale", "rope_eps", "sink_blocks", "sink_q", "tail",
+                "tau", "scale", "topk_ratio", "token_aug"}
+    return function if required.issubset(parameters) else None
+
+
+def run_chunked(producer, chunks, sequence, heads, rope_freqs, norm_weights, *,
+                epsilon, tau=DEFAULT_TAU, sink_start=None, sink_tokens=0):
+    first = last = 0
+    if sink_tokens:
+        start = sequence - sink_tokens if sink_start is None else int(sink_start)
+        first = max(0, start // SOL_BLOCK_K)
+        last = min((sequence + SOL_BLOCK_K - 1) // SOL_BLOCK_K,
+                   (start + sink_tokens + SOL_BLOCK_K - 1) // SOL_BLOCK_K)
+    output, _, _ = producer(chunks, sequence, heads, rope_freqs, norm_weights,
+        kmean=None, vscale=None, tau=float(tau), scale=HEAD_DIM ** -0.5,
+        sink_blocks=[first, last] if sink_tokens else [0, 0], sink_q=[0, 0],
+        rope_eps=float(epsilon), topk_ratio=0.0, tail=True, token_aug=0)
+    blocks = (sequence + SOL_BLOCK_Q - 1) // SOL_BLOCK_Q
+    return SolResult(output, blocks, blocks, -1, -1, float("nan"),
+                     "comfy-kitchen-sol-attn-chunked-current-stats", float(tau))
 
 
 def _load_sla_backend():
@@ -595,6 +660,7 @@ def run_custom_consume(
         routing = native.prepare(
             q, k, v, tau=tau,
             sink_tokens=sink_tokens, sink_start=sink_start,
+            quantize_qk=True,
         )
         row_count = routing["row_count"]
         lut = routing["lut"]
@@ -628,10 +694,14 @@ def run_custom_consume(
         minimum = int(row_count.min().item())
         maximum = int(row_count.max().item())
     sla = _load_sla_backend()
+    fused_preprocess = sm75 and "q_int8" in routing
     if sm75:
-        q_int8, q_scale = native.quantize(q, 16)
+        if "q_int8" in routing:
+            q_int8, q_scale = routing.pop("q_int8"), routing.pop("q_scale")
+        else:
+            q_int8, q_scale = native.quantize(q, 16)
     else:
-        q_int8, q_scale = sla._quantize(q, 16, multiplier=1.0)
+        q_int8, q_scale = sla._quantize(q.contiguous(), 16, multiplier=1.0)
     del q
     required_q_scales = query_blocks * 4
     if q_scale.shape[-1] < required_q_scales:
@@ -639,9 +709,12 @@ def run_custom_consume(
             q_scale, (0, required_q_scales - q_scale.shape[-1]), value=1.0,
         )
     if sm75:
-        k_int8, k_scale = native.quantize(k, SOL_BLOCK_K)
+        if "k_int8" in routing:
+            k_int8, k_scale = routing.pop("k_int8"), routing.pop("k_scale")
+        else:
+            k_int8, k_scale = native.quantize(k, SOL_BLOCK_K)
     else:
-        k_int8, k_scale = sla._quantize(k, SOL_BLOCK_K, multiplier=1.0)
+        k_int8, k_scale = sla._quantize(k.contiguous(), SOL_BLOCK_K, multiplier=1.0)
     del k
     if capability == (7, 5):
         if all_int8:
@@ -664,11 +737,16 @@ def run_custom_consume(
         output = _load_sm75_backend().run(
             q_int8, k_int8, v_input, q_scale, k_scale, row_count, lut,
             all_int8=all_int8, approximation=approximation,
+            validated_routing=routing.get("validated_routing", False),
         )
         implementation = (
             "star7-sm75-sol-exact-plus-centroid-q64k64-all-int8"
             if all_int8 else "star7-sm75-sol-exact-plus-centroid-q64k64-fp16-pv"
         )
+        if fused_preprocess:
+            implementation += "-fused-preprocess"
+        if routing.get("compact_workspace", False):
+            implementation += "-smem24k" if all_int8 else "-smem32k"
     else:
         if not all_int8:
             raise SolUnavailableError(
@@ -676,7 +754,7 @@ def run_custom_consume(
             )
         if capability < (8, 0) or triton is None:
             raise SolUnavailableError("SM80+ All-INT8 Sol requires SM80+ and Triton")
-        v_int8, v_scale = sla._quantize(v, SOL_BLOCK_K, multiplier=1.0)
+        v_int8, v_scale = sla._quantize(v.contiguous(), SOL_BLOCK_K, multiplier=1.0)
         del v
         k_centroid_int8, k_centroid_scale = sla._quantize(
             k_centroid, SOL_BLOCK_K, multiplier=1.0,
