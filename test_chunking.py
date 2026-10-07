@@ -357,7 +357,7 @@ def test_mlp_chunk_matches_full_forward(device=torch.device("cpu")):
     x = torch.randn(519, 16, dtype=torch.float32, device=device)
     expected = h3_model.MLP.forward(mlp, x)
 
-    chunk_nodes._CONFIG.update(mlp_chunk_tokens=256, auto_halve_on_oom=False, verbose=False)
+    chunk_nodes._CONFIG.update(mlp_chunk_tokens=256, effective_mlp_chunk_tokens=256, auto_halve_on_oom=False, verbose=False)
     mlp._star7_reuse_mlp_input = True
     actual = chunk_nodes._chunked_h3_mlp_forward(mlp, x)
 

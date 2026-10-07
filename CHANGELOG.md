@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.18.4 - 2026-10-07
+
+- Reuse full-sequence QKV, MLP and output-projection results on single-chunk paths to reduce buffer allocations and copies.
+- Support three reference-audio inputs in All-in-one Conditioning; show inputs 1 and 2 by default and reveal input 3 when input 2 is connected.
+
 ## 2.18.3 - 2026-10-07
 
 - Add a visible DLSS NR model selector with support for variants in `models/upscale_models`; switching models reinitializes the renderer.

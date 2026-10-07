@@ -693,6 +693,7 @@ class MiniMaxH3MaterialPromptStar7(io.ComfyNode):
                 io.Audio.Input("ref_video_audio_2", optional=True),
                 io.Audio.Input("ref_audio_0", optional=True),
                 io.Audio.Input("ref_audio_1", optional=True),
+                io.Audio.Input("ref_audio_2", optional=True),
             ],
             outputs=[
                 io.Model.Output(display_name="model"),
@@ -713,7 +714,7 @@ class MiniMaxH3MaterialPromptStar7(io.ComfyNode):
         ref_images=None,
         ref_video_0=None, ref_video_1=None, ref_video_2=None,
         ref_video_audio_0=None, ref_video_audio_1=None, ref_video_audio_2=None,
-        ref_audio_0=None, ref_audio_1=None,
+        ref_audio_0=None, ref_audio_1=None, ref_audio_2=None,
         **legacy_inputs,
     ):
         from comfy_extras.nodes_minimax_h3 import (
@@ -746,7 +747,7 @@ class MiniMaxH3MaterialPromptStar7(io.ComfyNode):
                       (ref_video_0, ref_video_1, ref_video_2)) if item is not None}
         ref_video_audios = {f"ref_video_audio_{i}": item for i, item in enumerate(
                             (ref_video_audio_0, ref_video_audio_1, ref_video_audio_2)) if item is not None}
-        standalone_audios = [item for item in (ref_audio_0, ref_audio_1) if item is not None]
+        standalone_audios = [item for item in (ref_audio_0, ref_audio_1, ref_audio_2) if item is not None]
 
         from comfy_extras.nodes_minimax_h3 import temporal_shape
         target_frames = temporal_shape(int(length))[0]

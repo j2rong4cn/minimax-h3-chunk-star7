@@ -316,6 +316,26 @@ def test_reference_to_video_call_uses_names_supported_by_old_and_new_comfyui():
         assert result["signature"] == signature
 
 
+def test_material_conditioning_passes_three_reference_audios(monkeypatch):
+    from . import h3_face_refine_star7 as node_module
+    audios = [object(),object(),object()]
+    captured = {}
+    positive = [[torch.zeros(1,1,8),{}]]
+    latent = {"samples":object()}
+    def encode(*args):
+        captured['audios'] = args[-1]
+        captured['prompt'] = args[4]
+        return positive,latent
+    monkeypatch.setattr(node_module,'_execute_reference_to_video',encode)
+    schema = MiniMaxH3MaterialPromptStar7.INPUT_TYPES()
+    assert 'ref_audio_2' in schema['optional']
+    result = MiniMaxH3MaterialPromptStar7.execute(object(),object(),object(),object(),
+        '<Audio 1> <Audio 2> <Audio 3>',768,1344,243,
+        audio_mode='模型原生生成 / Native',ref_audio_0=audios[0],ref_audio_1=audios[1],ref_audio_2=audios[2])
+    assert list(captured['audios'].values()) == audios
+    assert captured['prompt'] == '<Audio 1> <Audio 2> <Audio 3>'
+
+
 def test_prompt_audio_tags_keep_official_order_and_use_drive_alias():
     prompt, warnings = _prepare_prompt_tags(
         "drive=<Audio D>; video=<Audio 1>; standalone=<Audio 2>",

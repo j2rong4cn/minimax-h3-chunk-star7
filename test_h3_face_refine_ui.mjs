@@ -243,7 +243,7 @@ assert.deepEqual(
         "drive_audio", "last_frame",
         "ref_images.ref_image_0", "ref_images.ref_image_1",
         "ref_images.ref_image_2", "ref_images.ref_image_3",
-        "ref_video_0", "ref_video_audio_0", "ref_audio_0",
+        "ref_video_0", "ref_video_audio_0", "ref_audio_0", "ref_audio_1",
     ],
 );
 assert.equal(material.inputs[2].label, "参考图 1 - <Picture 1>");
@@ -331,3 +331,189 @@ assert.deepEqual(
 assert.equal(app.graph.links[44].target_slot, 4);
 
 console.log("H3 conditioning dynamic audio label tests: PASS");
+
+const audioInputs = () => material.inputs.filter(input => /^ref_audio_\d+$/.test(input.name));
+assert.equal(audioInputs().length, 2);
+for (let slot = 0; slot < 3; slot += 1) {
+    const input = audioInputs().find(input => input.name === `ref_audio_${slot}`);
+    assert.ok(input, `reference audio ${slot + 1} must appear`);
+    input.link = 100 + slot;
+    app.graph.links[input.link] = { target_id: material.id, target_slot: material.inputs.indexOf(input) };
+    material.onConnectionsChange();
+    assert.equal(audioInputs().length, Math.min(slot + 2, 3));
+}
+assert.deepEqual(audioInputs().map(input => input.name), ["ref_audio_0", "ref_audio_1", "ref_audio_2"]);
+material.onConfigure({});
+assert.equal(audioInputs().length, 3);
+for (const input of audioInputs()) assert.equal(app.graph.links[input.link].target_slot, material.inputs.indexOf(input));
+audioInputs()[1].link = null;
+material.onConnectionsChange();
+assert.deepEqual(audioInputs().map(input => [input.name,input.link]),
+    [["ref_audio_0",100],["ref_audio_1",null],["ref_audio_2",102]]);
+assert.equal(app.graph.links[102].target_slot,material.inputs.indexOf(audioInputs()[2]));
+audioInputs()[2].link = null;
+material.onConnectionsChange();
+assert.deepEqual(audioInputs().map(input => [input.name,input.link]),
+    [["ref_audio_0",100],["ref_audio_1",null]]);
+audioInputs()[0].link = null;
+material.onConnectionsChange();
+assert.equal(audioInputs().length, 2);
+// Connecting only input 2 must also reveal input 3; slot identities stay stable.
+audioInputs()[1].link = 103;
+app.graph.links[103] = { target_id: material.id, target_slot: material.inputs.indexOf(audioInputs()[1]) };
+material.onConnectionsChange();
+assert.deepEqual(audioInputs().map(input => [input.name,input.link]),
+    [["ref_audio_0",null],["ref_audio_1",103],["ref_audio_2",null]]);
+material.onConfigure({});
+assert.equal(app.graph.links[103].target_slot,material.inputs.indexOf(audioInputs()[1]));
+console.log("Reference audio minimum 2, growth on input 2, maximum 3, reload and disconnect: PASS");
+
+// Current LiteGraph resolves input.link through its slot index, rather than
+// storing a link on the input object; endpoint setters reject collisions.
+const indexed = Object.create(MaterialNodeType.prototype);
+indexed.id = 900;
+indexed.graph = { links: new Map() };
+indexed.inputs = [];
+indexed.outputs = [];
+indexed.widgets = [
+    { name: "width", value: 1344, type: "number", options: {} },
+    { name: "height", value: 768, type: "number", options: {} },
+    { name: "length", value: 124, type: "number", options: {} },
+];
+indexed.size = [420, 716];
+indexed.computeSize = () => [420, 716];
+indexed.setSize = (size) => { indexed.size = size; };
+indexed.setDirtyCanvas = () => {};
+indexed.addInput = (name, type, extra = {}) => {
+    const input = { name, type, ...extra };
+    Object.defineProperty(input, "link", { get() {
+        const slot = indexed.inputs.indexOf(input);
+        return [...indexed.graph.links.values()].find(link => link.target_slot === slot)?.id ?? null;
+    } });
+    indexed.inputs.push(input);
+    return input;
+};
+indexed.removeInput = (slot) => {
+    assert.equal(indexed.inputs[slot].link, null, "only empty inputs may be removed");
+    const shifted = [...indexed.graph.links.values()].filter(link => link.target_slot > slot)
+        .sort((a, b) => a.target_slot - b.target_slot);
+    indexed.inputs.splice(slot, 1);
+    for (const link of shifted) link.target_slot -= 1;
+};
+const attachIndexedLink = (name, id, type) => {
+    const input = indexed.inputs.find(input => input.name === name);
+    let slot = indexed.inputs.indexOf(input);
+    const link = { id, target_id: indexed.id, type: type ?? input.type };
+    Object.defineProperty(link, "target_slot", {
+        get() { return slot; },
+        set(value) {
+            assert.ok(![...indexed.graph.links.values()].some(other => other !== link && other.target_slot === value),
+                `input ${value} is already occupied`);
+            slot = value;
+        },
+    });
+    indexed.graph.links.set(id, link);
+};
+for (const [name, type] of [
+    ["last_frame", "IMAGE"], ["ref_audio_0", "AUDIO"], ["ref_audio_1", "AUDIO"],
+    ["prompt", "STRING"], ["width", "INT"], ["height", "INT"], ["length", "INT"],
+    ["ref_images.ref_image_0", "IMAGE"], ["ref_images.ref_image_1", "IMAGE"],
+]) indexed.addInput(name, type, ["prompt", "width", "height", "length"].includes(name) ? { widget: { name } } : {});
+attachIndexedLink("prompt", 201);
+attachIndexedLink("ref_images.ref_image_0", 202);
+attachIndexedLink("ref_audio_0", 203);
+indexed.onNodeCreated();
+attachIndexedLink("ref_audio_1", 204);
+indexed.onConnectionsChange();
+const expectedIndexedLinks = { prompt: 201, "ref_images.ref_image_0": 202, ref_audio_0: 203, ref_audio_1: 204 };
+const assertIndexedLayout = () => {
+    for (const [name, id] of Object.entries(expectedIndexedLinks)) {
+        const input = indexed.inputs.find(input => input.name === name);
+        assert.equal(input.link, id, `${name} must retain its own connection`);
+        assert.equal(indexed.graph.links.get(id).target_slot, indexed.inputs.indexOf(input));
+    }
+    assert.ok(indexed.inputs.some(input => input.name === "ref_audio_2"));
+    for (const name of ["width", "height", "length"]) {
+        const input = indexed.inputs.find(input => input.name === name);
+        assert.equal(input.link, null, `${name} must not acquire an audio or prompt link`);
+        assert.equal(input.widget.name, name);
+    }
+    assert.deepEqual(indexed.widgets.map(widget => widget.value), [1344, 768, 124]);
+    const promptIndex = indexed.inputs.findIndex(input => input.name === "prompt");
+    assert.ok(indexed.inputs.findIndex(input => input.name === "ref_audio_2") < promptIndex);
+};
+assertIndexedLayout();
+indexed.onConfigure({});
+indexed.onConnectionsChange();
+assertIndexedLayout();
+console.log("Index-based link lookup, occupied-slot protection, audio growth and converted-widget integrity: PASS");
+
+const legacyShifted = Object.create(MaterialNodeType.prototype);
+legacyShifted.inputs = [
+    { name: "ref_audio_0", type: "AUDIO", link: null },
+    { name: "ref_audio_1", type: "AUDIO", link: null },
+    { name: "ref_audio_2", type: "AUDIO", link: 301 },
+    { name: "prompt", type: "STRING", link: 302, widget: { name: "prompt" } },
+    { name: "width", type: "INT", link: null, widget: { name: "width" } },
+];
+legacyShifted.graph = { links: new Map([
+    [301, { id: 301, type: "STRING", target_slot: 2 }],
+    [302, { id: 302, type: "INT", target_slot: 3 }],
+]) };
+legacyShifted.widgets = [];
+legacyShifted.outputs = [];
+legacyShifted.removeInput = (slot) => {
+    legacyShifted.inputs.splice(slot, 1);
+    for (const link of legacyShifted.graph.links.values()) if (link.target_slot > slot) link.target_slot -= 1;
+};
+legacyShifted.onConfigure({});
+assert.equal(legacyShifted.inputs.find(input => input.name === "prompt").link, 301);
+assert.equal(legacyShifted.inputs.find(input => input.name === "width").link, 302);
+assert.equal(legacyShifted.inputs.filter(input => /^ref_audio_/.test(input.name)).length, 2);
+for (const input of legacyShifted.inputs.filter(input => input.link != null)) {
+    assert.equal(legacyShifted.graph.links.get(input.link).target_slot, legacyShifted.inputs.indexOf(input));
+}
+console.log("Saved insertion-shift recovery on legacy writable-link inputs: PASS");
+
+// Optional regression fixture supplied locally; reference media and prompt
+// contents are neither printed nor copied into the repository.
+if (process.argv[2]) {
+    const workflow = JSON.parse(fs.readFileSync(process.argv[2], "utf8").replace(/^\uFEFF/, ""));
+    const saved = workflow.nodes.find(node => node.type === "MiniMaxH3MaterialPromptStar7");
+    assert.ok(saved, "workflow must contain an all-in-one conditioning node");
+    const savedLinks = new Map(workflow.links.map(link => [link[0], link]));
+    indexed.inputs = [];
+    indexed.graph.links.clear();
+    const expected = new Map();
+    for (const input of saved.inputs) {
+        indexed.addInput(input.name, input.type, input.widget ? { widget: { ...input.widget } } : {});
+        if (input.link != null) {
+            attachIndexedLink(input.name, input.link, savedLinks.get(input.link)?.[5]);
+            expected.set(input.name, input.link);
+        }
+    }
+    const audioIndex = saved.inputs.findIndex(input => input.name === "ref_audio_2");
+    const shifted = audioIndex >= 0 && savedLinks.get(saved.inputs[audioIndex].link)?.[5] === "STRING";
+    if (shifted) {
+        for (let index = audioIndex; index < saved.inputs.length; index += 1) expected.delete(saved.inputs[index].name);
+        for (let index = audioIndex; index < saved.inputs.length; index += 1) {
+            const input = saved.inputs[index];
+            if (input.link != null) expected.set(saved.inputs[index + 1].name, input.link);
+        }
+    }
+    indexed.onConfigure({});
+    indexed.onNodeCreated();
+    for (let pass = 0; pass < 3; pass += 1) {
+        indexed.onConnectionsChange();
+        indexed.onConfigure({});
+        for (const [name, link] of expected) {
+            assert.equal(indexed.inputs.find(input => input.name === name)?.link, link, name);
+        }
+        for (const input of saved.inputs.filter(input => input.widget && !expected.has(input.name))) {
+            assert.equal(indexed.inputs.find(current => current.name === input.name)?.link, null, input.name);
+        }
+        assert.ok(indexed.inputs.find(input => input.name === "ref_audio_2"));
+    }
+    assert.equal(indexed.inputs.find(input => input.name === "ref_audio_2").link, shifted ? null : saved.inputs[audioIndex]?.link ?? null);
+    console.log("Supplied workflow: saved insertion shift restored; all media/widget connections stable across reloads: PASS");
+}

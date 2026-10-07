@@ -22,7 +22,7 @@ except ImportError:
     import h3_preprocess
 
 _LOG = logging.getLogger("MiniMaxH3ActivationChunkStar7")
-NODE_VERSION = "2.18.2"
+NODE_VERSION = "2.18.4"
 FP16_EXACT_PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 HYBRID_ALL_INT8_BACKEND_NAME = "hybrid_sm75_ck_sla_all_int8"
 SM86PLUS_BACKEND_NAME = "sla_sm80+_qk_int8_pv_bf16"
@@ -1247,7 +1247,9 @@ def _run_chunked_h3_mlp(
                     "unexpected H3 MLP chunk output: "
                     f"got shape={tuple(result.shape)}, expected shape={expected}"
                 )
-            if output is x and result.dtype != x.dtype:
+            if start == 0 and end == seq_len:
+                output = result
+            elif output is x and result.dtype != x.dtype:
                 # Preserve the previous safe behavior for an upstream MLP
                 # that deliberately changes the block compute dtype.
                 output = None
@@ -1260,7 +1262,8 @@ def _run_chunked_h3_mlp(
                     f"H3 MLP output dtype changed between chunks: "
                     f"{output.dtype} -> {result.dtype}"
                 )
-            output[start:end].copy_(result)
+            if not (start == 0 and end == seq_len):
+                output[start:end].copy_(result)
             del result, expanded, chunk_input
             start = end
             calls += 1
@@ -1640,9 +1643,12 @@ def _run_chunked_h3_out_proj(
             if fused_used is not None:
                 _SM75_OUT_PROJ_FUSED_SUPPORT[support_key] = bool(fused_used)
                 fused_chunks = fused_chunks or bool(fused_used)
-            if output is None:
+            if start == 0 and end == sequence:
+                output = result
+            elif output is None:
                 output = result.new_empty((sequence, result.shape[-1]))
-            output[start:end].copy_(result)
+            if not (start == 0 and end == sequence):
+                output[start:end].copy_(result)
             start = end
             calls += 1
             del result
@@ -2239,6 +2245,7 @@ def _minimax_ck_int8_attention_forward(self, x, rope_freqs=None, transformer_opt
         'optimized_attention_override' not in transformer_options
         and x.dtype == torch.float16 and self.head_dim == 128
         and s > 1024 and _CONFIG['effective_qkv_chunk_tokens'] >= 256
+        and _CONFIG['effective_qkv_chunk_tokens'] < s
         and _CONFIG['effective_qkv_chunk_tokens'] % 128 == 0
         and h3_preprocess.available(x.device)
         and h3_preprocess.memory_pressure(x, self.heads)
@@ -2482,6 +2489,7 @@ def _minimax_sla_forward(
         q, k, v, priority_ranges, layout="BHLD",
     )
     device_index = q.device.index
+    q, k, v = (part.contiguous() for part in (q, k, v))
     owned_qkv = [q, k, v]
     del q, k, v
     result = sla_backend.sparse_attention_consume(
@@ -2608,6 +2616,7 @@ def _minimax_sol_forward(
     )
 
     if official:
+        q, k, v = (part.contiguous() for part in (q, k, v))
         result = sol_backend.run_official(
             q, k, v,
             tau=sol_backend.DEFAULT_TAU,
@@ -2621,6 +2630,7 @@ def _minimax_sol_forward(
             1, sequence, self.heads * self.head_dim
         ).squeeze(0)
     else:
+        q, k, v = (part.contiguous() for part in (q, k, v))
         owned_qkv = [q, k, v]
         del q, k, v
         result = sol_backend.run_custom_consume(
@@ -2768,6 +2778,7 @@ def _minimax_vsa_sm75_forward(
     del padded
 
     backend = _load_vsa_sm75_backend()
+    q, k, v = (part.contiguous() for part in (q, k, v))
     q_mean = backend.block_means(q, plan["block_len"])
     k_mean = backend.block_means(k, plan["block_len"])
     v_mean = (
@@ -3090,10 +3101,10 @@ def _prepare_h3_qkv_chunked(
     self, x, rope_freqs, mm, quant_ops, output_dtype: Optional[torch.dtype] = None,
     output_layout: str = "BHLD", raw_capture=None, compact_query=False,
 ):
-    """Prepare contiguous backend-layout Q/K/V in token chunks.
+    """Prepare backend-layout Q/K/V, allocating assembly only for multiple chunks.
 
-    Buffers are allocated directly in the consuming backend's layout. CK/SLA
-    use [1,H,S,D]; NVIDIA Sol uses contiguous [1,S,H,D].
+    Single-chunk results retain their strides. Strict native backends materialize
+    contiguous inputs at their call boundary; CK/ VEDA can consume the views.
     """
     sequence = int(x.shape[0])
     heads, head_dim = self.heads, self.head_dim
@@ -3141,45 +3152,20 @@ def _prepare_h3_qkv_chunked(
                 "using per-chunk streaming"
             )
     _set_sequence_status("QKV", sequence)
-    # The normal path retains full Q/K/V; compact CK keeps packed Q/K and
-    # floating V. Their fixed storage cannot be reduced by shrinking row tiles.
-    qkv_buffers = []
-    for allocation_attempt in range(2):
-        try:
-            shape = (1, heads, sequence, head_dim) if output_layout == 'BHLD' else (1, sequence, heads, head_dim)
-            qkv_buffers = [
-                h3_preprocess.CompactQK(shape, x.device) if compact_query else torch.empty(
-                    (1, heads, sequence, head_dim)
-                    if output_layout == "BHLD"
-                    else (1, sequence, heads, head_dim),
-                    dtype=output_dtype,
-                    device=x.device,
-                )
-            ]
-            qkv_buffers.append(None if compact_query else torch.empty(shape, device=x.device, dtype=output_dtype))
-            qkv_buffers.append(torch.empty(shape, device=x.device, dtype=output_dtype))
-            break
-        except Exception as exc:
-            qkv_buffers.clear()
-            if not _is_cuda_oom(exc) or allocation_attempt:
-                if _is_cuda_oom(exc):
-                    required_gib = (
-                        (2 if compact_query else 3) * heads * sequence * head_dim
-                        * torch.empty((), dtype=output_dtype).element_size()
-                        / 1024**3
-                    )
-                    _LOG.error(
-                        "[Star7 H3 Chunk] Full Q/K/V buffer OOM | required=%.2fGiB "
-                        "| S=%d | dtype=%s. QKV/MLP/RoPE chunk reduction cannot "
-                        "lower this fixed attention input; reduce reference tokens "
-                        "or canvas size.",
-                        required_gib, sequence, output_dtype,
-                    )
-                raise
-            exc.__traceback__ = None
-            _clear_cuda_after_oom(x.device)
-    q_out, k_out, v_out = qkv_buffers
-    del qkv_buffers
+    shape = (1, heads, sequence, head_dim) if output_layout == "BHLD" else (1, sequence, heads, head_dim)
+    q_out = k_out = v_out = None
+    if compact_query:
+        for allocation_attempt in range(2):
+            try:
+                q_out = h3_preprocess.CompactQK(shape, x.device)
+                v_out = torch.empty(shape, device=x.device, dtype=output_dtype)
+                break
+            except Exception as exc:
+                q_out = v_out = None
+                if not _is_cuda_oom(exc) or allocation_attempt:
+                    raise
+                exc.__traceback__ = None
+                _clear_cuda_after_oom(x.device)
     rope_fn = _ORIGINAL_RMS_ROPE_SPLIT_HALF_INPLACE or quant_ops.ck.rms_rope_split_half_
     if compact_query:
         positions = torch.arange(9, device=x.device) * (sequence - 1) // 8
@@ -3201,6 +3187,7 @@ def _prepare_h3_qkv_chunked(
     block_index = getattr(self, "_star7_block_index", None)
     while start < sequence:
         end = min(start + chunk, sequence)
+        allocating_assembly = False
         try:
             profile_qkv = bool(profile_total and start == 0)
             qkv_profile_start = time.perf_counter() if profile_qkv else None
@@ -3258,15 +3245,9 @@ def _prepare_h3_qkv_chunked(
                         time.perf_counter() - rope_profile_start
                     ) * 1000.0
                 if output_layout == "BHLD":
-                    if compact_query:
-                        q_out.write(start, q.permute(0, 2, 1, 3).to(output_dtype))
-                        q_out.write_key(start, k.permute(0, 2, 1, 3).to(output_dtype))
-                    else:
-                        q_out[:, :, start:end, :].copy_(q.permute(0, 2, 1, 3))
-                        k_out[:, :, start:end, :].copy_(k.permute(0, 2, 1, 3))
+                    q_part, k_part = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3)
                 else:
-                    q_out[:, start:end, :, :].copy_(q)
-                    k_out[:, start:end, :, :].copy_(k)
+                    q_part, k_part = q, k
             else:
                 q_norm = self.q_norm(q.view(end - start, heads, head_dim))
                 k_norm = self.k_norm(k.view(end - start, heads, head_dim))
@@ -3279,30 +3260,54 @@ def _prepare_h3_qkv_chunked(
                     block_index, row_dim=0, check_fp16_range=True,
                 )
                 if output_layout == "BHLD":
-                    if compact_query:
-                        q_out.write(start, q_norm.permute(1, 0, 2).unsqueeze(0).to(output_dtype))
-                        q_out.write_key(start, k_norm.permute(1, 0, 2).unsqueeze(0).to(output_dtype))
-                    else:
-                        q_out[:, :, start:end, :].copy_(q_norm.permute(1, 0, 2).unsqueeze(0))
-                        k_out[:, :, start:end, :].copy_(k_norm.permute(1, 0, 2).unsqueeze(0))
+                    q_part = q_norm.permute(1, 0, 2).unsqueeze(0)
+                    k_part = k_norm.permute(1, 0, 2).unsqueeze(0)
                 else:
-                    q_out[:, start:end, :, :].copy_(q_norm.unsqueeze(0))
-                    k_out[:, start:end, :, :].copy_(k_norm.unsqueeze(0))
-            if output_layout == "BHLD":
-                v_out[:, :, start:end, :].copy_(v.permute(1, 0, 2).unsqueeze(0))
+                    q_part, k_part = q_norm.unsqueeze(0), k_norm.unsqueeze(0)
+            v_part = v.permute(1, 0, 2).unsqueeze(0) if output_layout == "BHLD" else v.unsqueeze(0)
+            if compact_query:
+                q_out.write(start, q_part.to(output_dtype))
+                q_out.write_key(start, k_part.to(output_dtype))
+                v_out[:, :, start:end, :].copy_(v_part)
+            elif start == 0 and end == sequence:
+                q_out, k_out, v_out = (part.to(output_dtype) for part in (q_part, k_part, v_part))
             else:
-                v_out[:, start:end, :, :].copy_(v.unsqueeze(0))
+                if q_out is None:
+                    allocating_assembly = True
+                    for allocation_attempt in range(2):
+                        try:
+                            buffers = [torch.empty(shape, device=x.device, dtype=output_dtype) for _ in range(3)]
+                            break
+                        except Exception as exc:
+                            if not _is_cuda_oom(exc) or allocation_attempt:
+                                raise
+                            exc.__traceback__ = None
+                            _clear_cuda_after_oom(x.device)
+                    q_out, k_out, v_out = buffers
+                    del buffers
+                    allocating_assembly = False
+                if output_layout == "BHLD":
+                    q_out[:, :, start:end, :].copy_(q_part)
+                    k_out[:, :, start:end, :].copy_(k_part)
+                    v_out[:, :, start:end, :].copy_(v_part)
+                else:
+                    q_out[:, start:end, :, :].copy_(q_part)
+                    k_out[:, start:end, :, :].copy_(k_part)
+                    v_out[:, start:end, :, :].copy_(v_part)
             start = end
-            del qkv_chunk, q, k, v
+            del qkv_chunk, q, k, v, q_part, k_part, v_part
+            q_norm = k_norm = None
         except Exception as exc:
             if not (
                 _is_cuda_oom(exc)
+                and not allocating_assembly
                 and _CONFIG["auto_halve_on_oom"]
                 and chunk > 256
             ):
                 raise
             new_chunk = max(256, chunk // 2)
             _remember_effective_chunk("QKV", chunk, new_chunk)
+            qkv_chunk = q = k = v = q_part = k_part = v_part = q_norm = k_norm = None
             exc.__traceback__ = None
             _clear_cuda_after_oom(x.device)
             chunk = new_chunk

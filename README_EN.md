@@ -2,8 +2,6 @@
 
 [中文](README.md) · [Benchmarks](BENCHMARKS.md) · [Example workflows](workflows)
 
-The 1006 bilingual examples include: first pass -> optional HD -> optional Face Repair -> Star7 Chunked Decode, with FPS-controlled live previews and VEDA bypassed by default. Select installed models and replace reference-media placeholders.
-
 Run high-quality, long-duration MiniMax H3 video generation on GPUs with limited VRAM. The core node combines independent QKV, RoPE, and MLP activation chunking with a selectable attention backend. It does not alter the sampler, sigma schedule, latent layout, VAE, duration, frame count, or output resolution.
 
 ## Main features
@@ -97,11 +95,25 @@ Protected FP16 W4A8 on SM75 fuses SwiGLU, rescaling and casting to reduce FP32 i
 
 Chinese ComfyUI environments display Chinese node and control labels; other locales display English. Attention backend IDs remain unchanged.
 
-Connected media inputs show their prompt tags: `<Picture N>`, `<Video N>`, and `<Audio N>`; driving audio uses `<Audio D>`.
+Connected media inputs show their prompt tags: `<Picture N>`, `<Video N>`, and `<Audio N>`; driving audio uses `<Audio D>`. Up to three standalone reference audios are supported. Inputs 1 and 2 are always visible; connecting input 2 reveals input 3.
 
 Place the complete DMD8 stage under `ComfyUI/models/vdn/<model folder>` and connect VDN between the H3 model loader and the Star7 chunk node. The INT8 ConvRot stage is recommended. Use an H3 base without Turbo or other LoRAs already fused in; VDN applies its own trained adapters. The chunk node preserves VDN attention automatically.
 
 Reference-image limits accept `0` to preserve source size, `0 < value <= 10` as a downscale-only megapixel cap, and larger values as a pixel long-edge cap. Cropping precedes resizing. Preview decoders are selectable, existing workflow values are restored automatically, and tiled HD logs report each tile prediction.
+
+### H3 VEDA Sparse Attention
+
+Works with normal H3 sampling or Star7 chunked CK without a separate VEDA plugin. Place the predictor at `ComfyUI/models/veda/minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors`. Disabling VEDA passes the model through without loading the predictor or installing a patch. Routing, timing and diagnostics stay in logs.
+
+Connect LoRA / Sigma Shift → VEDA → Star7 Chunk (CK) → Guider. If using live preview, insert it between Chunk and Guider. SM75 uses Star7 INT8 QK / FP16 PV sparse kernels; SM80+ uses upstream Triton. Chunk continues to handle QKV / RoPE / MLP, and CK handles non-sparse attention calls. Do not combine VEDA with another sparse-attention backend. Measure speed on the complete workflow.
+
+### H3 Live Preview
+
+Connect to the Guider MODEL path; Scheduler can connect directly to Chunk. Disabling Show preview passes the model through without installing callbacks or loading, downloading or decoding the preview model. First step only is disabled by default; enabling it decodes only the first step.
+
+Uses `taeh3.safetensors` in `ComfyUI/models/vae_approx`, also accepting `taeh3_decoder.safetensors`. Missing models are downloaded and verified in the background without blocking sampling. Download or preview failure does not stop generation. The preview supports timeline scrubbing, looping playback and recovery after switching pages.
+
+Preview FPS is 1–24, default 5: a 10-second video shows about 50 frames. TAEH3 retains native latent resolution and continuous temporal state. Unselected frames skip the final spatial upsampling / RGB convolution, transfer and encoding; temporal-state computation still runs. The long-edge cap offers 256 / 384 / 512 / 768 / 1024, default 512, applied after RGB decoding. WebP quality is 1–100, default 80 for new nodes; older workflows without a saved quality retain 76. FPS affects decoder-tail work, while the long-edge cap and quality control display size and compression. These settings do not change final generation resolution.
 
 ### H3 One-click Face Repair
 
@@ -191,7 +203,7 @@ Restart ComfyUI after installing or updating.
 
 ## Example workflow
 
-- [General workflow - English](workflows/MiniMax-H3-Activation-Chunk-Star7-English.json): fully translated canvas and notes with all-in-one conditioning, chunk acceleration, live preview, independent H3 chunked decode, and optional second-pass refinement disabled by default. It is ready to use as a normal workflow immediately after import.
+- [General workflow - English](workflows/MiniMax-H3-Activation-Chunk-Star7-English.json): fully translated canvas and notes with all-in-one conditioning, chunk acceleration, live preview, independent H3 chunked decode, and optional second-pass refinement disabled by default. Select installed models and replace reference-media placeholders after importing.
 - [通用工作流（中文）](workflows/MiniMax-H3-Activation-Chunk-Star7.json): Chinese version with the same features and defaults.
 
 ## Recorded 1.0MP / 10-second result
@@ -214,6 +226,7 @@ These are observations from one local configuration, not cross-GPU performance g
 
 - SM75 Windows x64 ships with a CUDA 13 static-runtime DLL and requires an NVIDIA 580+ driver.
 - SM75 Linux x86_64 ships with a CUDA 12.6 static-runtime `.so`, targets Ubuntu 20.04 / glibc 2.31 or newer, and requires driver 525.60.13+.
+- VEDA SM75 kernels currently ship only as standalone Windows x64 CUDA DLLs, without Python / PyTorch C++ ABI linkage or local compilation requirements. No VEDA SM75 Linux binary is bundled. SM80+ uses upstream Triton. RTX 2080 Ti kernel numerical and normal / CK integration checks passed; RTX 2060 still requires device testing.
 - SM80+ SLA paths use Triton and compile/cache kernels on first use.
 - Official BF16 Sol first uses ComfyUI 0.34's compiled `comfy_kitchen.sol_attn`
   dispatcher when available, then falls back to the bundled NVIDIA Triton path.
@@ -222,20 +235,6 @@ These are observations from one local configuration, not cross-GPU performance g
 - Strict SLA/Sol/Hybrid modes stop on architecture, environment, self-test, or computation failures; they do not silently fall back to CK or Sage.
 - NaN/Inf guards detect and locate invalid output. They do not replace invalid values with zero and are not an FP16 repair mechanism.
 
-## H3 Live Preview
-
-`MiniMax H3 Live Preview - Star7` has a top-level Show preview switch. Off returns the incoming MODEL unchanged and installs no sampling callback, decoder load/download, decode, encoding worker, or transport. When enabled, it decodes uniformly sampled temporal positions after each eligible H3 sampling step with `taeh3.safetensors`; the installed alias `taeh3_decoder.safetensors` is also accepted. Hovering over the preview reveals a compact timeline: dragging scrubs across the sampled positions, and releasing resumes looping from the selected frame. Returning from another browser tab redraws retained frames or recovers the latest WebP from the backend if the page slept through its websocket event. The animation still updates at each configured step, but repetitive model-residency and successful-encode INFO messages from preview housekeeping are suppressed; initial decoder detection, download state, and all warnings/errors remain visible so sampling-speed lines stay easy to compare. If neither decoder filename is present in `models/vae_approx`, the node races the HF mirror and the pinned madebyollin/taehv source first, then tries the remaining fallbacks, verifying SHA-256 without blocking sampling. Preview starts at the next sampling callback after the download completes. If it becomes ready only at the final callback and no earlier preview was shown, one final preview is emitted. Download or preview failure never stops the main generation.
-
-The default preview uses 5 frames per second across the complete timeline at a 512-pixel long edge. `First step only` is disabled by default; when enabled, only Step 1 is decoded and all later preview work is skipped.
-
 ## License
 
-Star7 code is distributed under the [MIT License](LICENSE). Bundled NVIDIA Sol-Attn source is distributed under its [Apache 2.0 license and third-party notices](vendor/sol_attn/THIRD_PARTY_NOTICES.md). The H3 AdaLN curve grid and adaptation provenance are documented in the [Larryvrh H3 Turbo notice](vendor/LARRYVRH-H3-TURBO-NOTICE.md).
-
-## VEDA and live preview (2.18.1)
-
-VEDA has an enable switch and works with normal H3 sampling or Star7 chunked CK. Disable it to pass the model through without loading the predictor or installing its patch. SM75 uses the bundled Star7 CUDA INT8 QK / FP16 PV kernel; SM80+ uses upstream Triton. Do not combine VEDA with another sparse-attention backend. Predictor: `models/veda/minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors`. Diagnostics are logged instead of displayed in the node. Speed varies by workload.
-
-TAEH3 previews retain native latent resolution and continuous temporal state. FPS (1-24, default 5) selects frames before the final spatial/RGB decoder tail, transfer and encoding; temporal-state computation still runs. A 10-second video at 5 FPS shows about 50 frames. The 256/384/512/768/1024 long-edge cap is applied after RGB decoding. WebP quality (1-100) affects compression only. Neither setting changes final output resolution. Older workflows retain quality 76; new nodes default to 80.
-
-Since 2.18.1, Windows x64 VEDA uses a standalone CUDA DLL with no fixed Python/PyTorch C++ ABI dependency. Python headers, import libraries and local compilation are unnecessary. CUDA and C++ runtimes are statically linked; a CUDA-13-compatible NVIDIA driver and working CUDA-enabled PyTorch are required. Update the DLL and checksum manifest together, then restart ComfyUI. SM80+ retains upstream Triton. RTX 2080 Ti kernel numerical checks and normal/CK integration tests passed; RTX 2060 still requires device-side validation. No VEDA SM75 Linux binary is bundled. Third-party licenses and sources are included in `vendor/veda/LICENSE` and `vendor/veda/NOTICE.md`.
+Star7 code is distributed under the [MIT License](LICENSE). Bundled NVIDIA Sol-Attn source is distributed under its [Apache 2.0 license and third-party notices](vendor/sol_attn/THIRD_PARTY_NOTICES.md). The H3 AdaLN curve grid and adaptation provenance are documented in the [Larryvrh H3 Turbo notice](vendor/LARRYVRH-H3-TURBO-NOTICE.md). Upstream VEDA licensing and provenance are included in its [MIT License](vendor/veda/LICENSE) and [third-party notice](vendor/veda/NOTICE.md).

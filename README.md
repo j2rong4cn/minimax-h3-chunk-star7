@@ -2,8 +2,6 @@
 
 [中文说明](#中文说明) · [English](README_EN.md) · [实测记录](BENCHMARKS.md) · [示例工作流](workflows)
 
-1006 中英文示例包含：一采 → 可选二采高清 → 可选人脸修复 → Star7 分块解码，加入按帧率控制的实时预览及默认旁路的 VEDA。请自行选择已安装的模型并替换参考素材占位文件。
-
 This ComfyUI project helps MiniMax H3 run high-quality, long-duration video generation on GPUs with limited VRAM. Its core node provides independent QKV, RoPE, and MLP activation chunking together with a selectable attention backend. It does not change the sampler, sigma schedule, latent layout, VAE, duration, frame count, or output resolution.
 
 Attention choices include preserving an upstream backend, Comfy Kitchen INT8, architecture-specific SLA/Sol sparse attention, and step-level CK/Sparse/CK Hybrid modes. The package also includes compact reference-image, reference-video, and prompt-loading helpers.
@@ -136,6 +134,7 @@ SM75 的受保护 FP16 W4A8 路线融合 SwiGLU、缩放和转换，减少 FP32 
 - SM75 Windows x64：节点内置预编译 CUDA 13 静态运行时 DLL，需要支持 CUDA 13 的 NVIDIA 580+ 驱动。
 - SM75 Linux x86_64：节点内置 CUDA 12.6 静态运行时 `.so`，面向 Ubuntu 20.04 / glibc 2.31 及更新系统，需要 NVIDIA 525.60.13+ 驱动。
 - SM75 原生库只接收张量地址、形状和当前 CUDA stream，不链接 PyTorch C++ ABI，也不依赖 SageAttention。Turing Triton 不可用时，路由/量化预处理可使用有界显存 PyTorch 路径，核心稀疏注意力仍由原生 CUDA 库执行。
+- VEDA 的 SM75 内核目前仅提供 Windows x64 独立 CUDA DLL，不绑定 Python / PyTorch C++ ABI，无需复制 Python 的 `include`、`libs` 或自行编译；未提供 VEDA SM75 Linux 预编译库。SM80+ 使用上游 Triton。RTX 2080 Ti 已通过内核数值与普通 / CK 调用检查，RTX 2060 仍需实机验证。
 - SM80+ SLA 与 All-INT8 路径使用 Triton，首次运行会编译并写入缓存，后续运行复用。
 - SM80+ 官方 BF16 Sol 优先使用 ComfyUI 0.34 `comfy_kitchen.sol_attn` 的已编译后端；该接口不可用时才使用节点内置 NVIDIA Triton 实现。
 - `sol_sm80+_bf16_official` 已内置 NVlabs/Sana `sol-engine` 源码，无需另外安装 Sana。SM80/SM86 使用官方 Triton；支持的 SM89/SM90/SM100/SM120 环境在 CuTe DSL 与 `cuda-python` 可用时使用对应专用内核，否则由官方接口使用 Triton。
@@ -186,11 +185,25 @@ git clone https://github.com/star7code/minimax-h3-chunk-star7.git
 
 三个载入节点均支持将对应文件直接拖到节点上完成载入；它们都是独立工具，不会向模型注入注意力或精度补丁。
 
-多合一条件节点会在已连接素材后显示提示词标签：`<Picture N>`、`<Video N>`、`<Audio N>`；驱动音频固定为 `<Audio D>`。
+多合一条件节点会在已连接素材后显示提示词标签：`<Picture N>`、`<Video N>`、`<Audio N>`；驱动音频固定为 `<Audio D>`。独立参考音频最多 3 个，默认显示接口 1、2，连接接口 2 后显示接口 3。
 
 VDN 节点连接在 H3 模型载入与 Star7 分块节点之间。将完整 DMD8 stage 放入 `ComfyUI/models/vdn/<模型目录>`；推荐使用 INT8 ConvRot 版。请载入未预先融合 Turbo/其他 LoRA 的 H3 基础模型；VDN 自带配套适配器。分块节点会自动保留 VDN 注意力。
 
 参考图最长边限制支持 `0` 保持原尺寸、`0 < 值 ≤ 10` 按百万像素只缩小，以及大于 `10` 的最长边像素限制；启用比例调整时先裁切后缩小。预览模型可在节点内选择，旧工作流自动恢复参数。高清分格日志逐格记录每轮预测耗时。
+
+### H3 VEDA 稀疏注意力
+
+可接入普通 H3 采样或 Star7 分块 CK 链路，无需另装 VEDA 插件。预测器放入 `ComfyUI/models/veda/minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors`。关闭“启用 VEDA”时直接透传模型，不加载预测器、不安装补丁；路由、耗时和诊断信息只写日志。
+
+连接顺序：LoRA / Sigma Shift → VEDA → Star7 分块（CK）→ Guider；使用实时预览时接在分块与 Guider 之间。SM75 使用 Star7 INT8 QK / FP16 PV 稀疏内核，SM80+ 使用上游 Triton。分块节点继续处理 QKV / RoPE / MLP，CK 处理非稀疏注意力调用。不要与其他稀疏注意力后端叠加，完整工作流速度以实测为准。
+
+### H3 实时预览
+
+连接在 Guider 的 MODEL 路径，Scheduler 可直接连接分块节点。关闭“显示预览”时直接透传模型，不安装回调，也不加载、下载或解码预览模型。“只显示第一步预览”默认关闭；开启后仅在第一步解码一次。
+
+预览模型使用 `ComfyUI/models/vae_approx` 下的 `taeh3.safetensors`，也兼容 `taeh3_decoder.safetensors`。模型缺失时后台下载并校验，不阻塞采样；下载或预览失败不影响正式生成。画面提供时间轴拖动和循环播放，切换页面后可恢复最近的预览。
+
+每秒预览帧数为 1–24，默认 5：10 秒视频约显示 50 帧。TAEH3 保持原始 latent 分辨率和连续时间状态；未选中的帧跳过末端空间上采样 / RGB 卷积、搬运与编码，时间状态计算仍会进行。预览长边支持 256 / 384 / 512 / 768 / 1024，默认 512，在 RGB 解码后缩放；WebP 质量为 1–100，新节点默认 80，旧工作流未保存质量值时保留 76。帧率影响末端解码开销，长边和质量分别影响输出尺寸与压缩，不改变正式生成的分辨率。
 
 ### H3 一键人脸修复
 
@@ -249,10 +262,6 @@ UNET Loader -> LoRA -> Attention patch（可选）
             -> Activation Chunk - Star7 -> Live Preview - Star7 -> Guider -> Sampler
                                       `-> Scheduler -----------------> Sampler
 ```
-
-实时预览顶部提供“显示预览”总开关；关闭后直接返回原 MODEL，不安装采样回调，也不加载、下载或解码 TAEH3。开启时默认按每秒 5 帧预览完整时间轴、预览长边 512；帧率可设置为 1–24。“只显示第一步预览”默认关闭，开启后仅在 Step 1 解码一次，后续采样步骤不再产生预览开销。鼠标悬浮在预览画面上会显示迷你时间轴，拖动时定位画面，松开后从当前位置继续循环播放。切换到其他网页后返回时会重绘保留帧；若页面休眠期间漏收事件，会从后端取回该节点最近一次 WebP。动态画面仍按设置逐步更新，但每步重复的模型驻留和成功编码 INFO 会被安静处理；首次解码器识别、下载状态及所有异常仍会记录，使采样速度行保持清晰。它只接在 Guider 的 MODEL 路径，Scheduler 可继续直接连接 Chunk。
-
-实时预览使用约 22MB 的 `taeh3.safetensors`；也兼容已安装的 `taeh3_decoder.safetensors` 文件名。若两者都缺少，节点会优先并行尝试 HF 国内镜像与官方 madebyollin/taehv 固定版本，再按顺序切换其他来源，并校验 SHA-256；采样不会等待下载。下载完成后的下一个采样步骤会立即开始预览；若直到最终步骤才完成且此前没有显示过预览，则最终步骤只补发一次预览。下载失败只关闭预览，不影响正式生成。
 
 RTX 20 系：
 
@@ -387,21 +396,9 @@ STAR7_SLA_LONG_SELF_TEST=1
 
 ## 示例工作流
 
-- [通用工作流（中文）](workflows/MiniMax-H3-Activation-Chunk-Star7.json)：包含多合一条件载入、分块、实时预览、独立 H3 分块解码和默认关闭的可选二采；导入后可直接作为普通工作流使用。
+- [通用工作流（中文）](workflows/MiniMax-H3-Activation-Chunk-Star7.json)：包含多合一条件载入、分块、实时预览、独立 H3 分块解码和默认关闭的可选二采。导入后选择已安装的模型并替换参考素材占位文件。
 - [General workflow (English)](workflows/MiniMax-H3-Activation-Chunk-Star7-English.json)：完整翻译的英文画布与说明版本，功能和默认设置与中文版一致。
 
 ## License
 
-Star7 项目代码使用 [MIT License](LICENSE)。内置的 NVIDIA Sol-Attn 源码按其 [Apache 2.0 License](vendor/LICENSE.NVIDIA-Sana-Apache-2.0) 与 [第三方声明](vendor/sol_attn/THIRD_PARTY_NOTICES.md) 分发。H3 AdaLN 曲线网格及适配机制的来源与许可见 [Larryvrh H3 Turbo 声明](vendor/LARRYVRH-H3-TURBO-NOTICE.md)。
-
-### VEDA 与实时预览
-
-VEDA 节点顶部的「启用 VEDA」开关关闭时直接透传模型，不加载预测器、不安装补丁。参数使用中文名称，旧工作流无需补填开关。显卡自动分流：SM75 使用 Star7 CUDA 内核，SM80 及以上使用上游 Triton 内核；普通 H3 采样与 Star7 分块 CK 链路均可连接。路由、耗时及诊断信息只输出到日志。
-
-内置 `Star7VedaSparseAttention`，无需单独安装 VEDA 插件。模型链路：LoRA / Sigma Shift → VEDA → Star7 分块（CK）→ 实时预览 → Guider。SM75 使用内置 INT8 QK / FP16 PV Tensor Core 稀疏内核，直接读取 VEDA 选中的块，支持填充位遮罩；CK 负责未进入稀疏计算的注意力，分块继续负责 QKV / RoPE / MLP。其他稀疏注意力选择不要与 VEDA 叠加。SM75 尚属测试实现，完整工作流速度以实测为准。上游 VEDA 的 MIT 许可证及来源见 `vendor/veda/LICENSE` 和 `NOTICE.md`。
-
-实时预览长边支持 256 / 384 / 512 / 768 / 1024，并可调动画 WebP 质量 1–100。预览使用 TAEH3 原始 latent 分辨率并保留连续时间状态，末端 RGB 按 FPS 选择帧，再缩小输出图像；不再缩小 latent 或逐帧重置时间状态。提高 FPS 会增加末端解码计算量；预览不改变最终输出分辨率。旧工作流未保存质量值时保留 76，新节点默认 80。
-
-实时预览按每秒帧数（1–24，默认 5）覆盖整段视频：10 秒约 50 帧。TAEH3 时间状态连续更新，但未选中的帧跳过最后的空间上采样/RGB 卷积、搬运与编码；保留帧与完整解码对应帧一致。预览长边在 RGB 解码后缩放，不降低时间状态部分的解码分辨率；压缩质量只影响编码。
-
-2.18.1 的 Windows x64 VEDA 内核使用独立 CUDA DLL，不再绑定固定 Python / PyTorch C++ ABI，无需复制 Python 的 `include`、`libs` 或自行编译。CUDA 与 C++ 运行时已静态链接；需要支持 CUDA 13 的 NVIDIA 驱动和可用的 CUDA PyTorch 环境。更新节点后重启 ComfyUI，DLL 与校验清单需一并更新。SM80+ 保留原 Triton 路线。已通过 RTX 2080 Ti 内核数值及普通 / CK 调用测试；RTX 2060 尚需实机验证，未提供 VEDA SM75 Linux 预编译库。
+Star7 项目代码使用 [MIT License](LICENSE)。内置的 NVIDIA Sol-Attn 源码按其 [Apache 2.0 License](vendor/LICENSE.NVIDIA-Sana-Apache-2.0) 与 [第三方声明](vendor/sol_attn/THIRD_PARTY_NOTICES.md) 分发。H3 AdaLN 曲线网格及适配机制的来源与许可见 [Larryvrh H3 Turbo 声明](vendor/LARRYVRH-H3-TURBO-NOTICE.md)。 上游 VEDA 的许可与来源见 [MIT License](vendor/veda/LICENSE) 和 [第三方声明](vendor/veda/NOTICE.md)。

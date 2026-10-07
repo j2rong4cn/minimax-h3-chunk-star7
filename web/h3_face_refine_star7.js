@@ -129,22 +129,106 @@ function refreshMaterialReferenceImages(node) {
     addNextMaterialReferenceImage(node);
     placeMaterialReferenceImages(node);
 }
-function graphLink(linkRef) {
+function refreshMaterialReferenceAudios(node) {
+    if (node.__star7CompactingReferenceAudios || !Array.isArray(node.inputs)) return;
+    const references = node.inputs.map((input, index) => ({
+        input, index, slot: inputBaseName(input).match(/^ref_audio_(\d+)$/)?.[1],
+    })).filter(({ slot }) => slot != null);
+    if (!references.length) return;
+    const showThird = references.some(({ input, slot }) => Number(slot) >= 1 && input.link != null);
+    const visibleCount = showThird ? 3 : 2;
+    node.__star7CompactingReferenceAudios = true;
+    try {
+        for (const { index } of references.filter(({ slot }) => Number(slot) >= visibleCount).sort((a,b) => b.index-a.index)) {
+            if (typeof node.removeInput === "function") node.removeInput(index);
+            else node.inputs.splice(index, 1);
+        }
+        for (let slot = 0; slot < visibleCount; slot += 1) {
+            if (references.some((reference) => Number(reference.slot) === slot)) continue;
+            const name = `ref_audio_${slot}`;
+            if (typeof node.addInput === "function") node.addInput(name, "AUDIO");
+            else node.inputs.push({ name, type: "AUDIO", link: null });
+        }
+        const isReferenceAudio = (input) => /^ref_audio_\d+$/.test(inputBaseName(input));
+        const firstAudio = node.inputs.findIndex(isReferenceAudio);
+        const ordered = node.inputs.filter(isReferenceAudio)
+            .sort((a, b) => Number(inputBaseName(a).split("_").at(-1)) - Number(inputBaseName(b).split("_").at(-1)));
+        if (firstAudio >= 0) {
+            const before = node.inputs.slice(0, firstAudio).filter((input) => !isReferenceAudio(input));
+            const after = node.inputs.slice(firstAudio).filter((input) => !isReferenceAudio(input));
+            reorderMaterialInputs(node, [...before, ...ordered, ...after]);
+        }
+    } finally { node.__star7CompactingReferenceAudios = false; }
+}
+function graphLink(linkRef, node) {
     if (linkRef && typeof linkRef === "object") return linkRef;
-    const links = app.graph?.links;
+    const links = (node?.graph ?? app.graph)?.links;
     if (!links) return null;
     if (typeof links.get === "function") {
         return links.get(linkRef) ?? links.get(String(linkRef)) ?? null;
     }
     return links[linkRef] ?? links[String(linkRef)] ?? null;
 }
-function syncMaterialInputSlots(node) {
-    for (const [targetSlot, input] of (node.inputs ?? []).entries()) {
-        if (input?.link == null) continue;
-        const link = graphLink(input.link);
-        if (!link) continue;
+function reorderMaterialInputs(node, ordered) {
+    if (ordered.every((input, index) => input === node.inputs[index])) return;
+    // Modern input.link is an index-based graph lookup. Capture links BEFORE
+    // moving slots, including converted widgets such as prompt/width/height.
+    const linksByInput = new Map(node.inputs.map((input) => [input, graphLink(input.link, node)]));
+    const pending = ordered.flatMap((input, targetSlot) => {
+        const link = linksByInput.get(input);
+        return link && link.target_slot !== targetSlot ? [{ link, targetSlot }] : [];
+    });
+    node.inputs.splice(0, node.inputs.length, ...ordered);
+    moveMaterialInputLinks(pending, [...linksByInput.values()], ordered.length);
+    node._setConcreteSlots?.();
+    node.arrange?.();
+    node.expandToFitContent?.();
+    node.setDirtyCanvas?.(true, true);
+}
+function moveMaterialInputLinks(pending, links, inputCount) {
+    const occupied = new Map(links.filter(Boolean).map((link) => [link.target_slot, link]));
+    const move = (link, targetSlot) => {
+        occupied.delete(link.target_slot);
         link.target_slot = targetSlot;
         if (Object.hasOwn(link, "targetSlot")) link.targetSlot = targetSlot;
+        occupied.set(targetSlot, link);
+    };
+    // Endpoint setters reject occupied destinations. Move into free slots first;
+    // a permutation cycle uses one temporary, unoccupied endpoint synchronously.
+    let temporarySlot = Math.max(inputCount, ...occupied.keys()) + 1;
+    while (pending.length) {
+        const free = pending.findIndex(({ targetSlot }) => !occupied.has(targetSlot));
+        if (free < 0) {
+            move(pending[0].link, temporarySlot++);
+        } else {
+            const { link, targetSlot } = pending.splice(free, 1)[0];
+            move(link, targetSlot);
+        }
+    }
+}
+function restoreMaterialAudioInsertionLinks(node) {
+    // Repair only the known saved one-slot shift: a STRING prompt landed on
+    // newly inserted audio 3 immediately before the converted prompt widget.
+    const inputs = node.inputs ?? [];
+    const audioIndex = inputs.findIndex(input => inputBaseName(input) === "ref_audio_2");
+    if (audioIndex < 0 || inputBaseName(inputs[audioIndex + 1]) !== "prompt" || !inputs[audioIndex + 1]?.widget) return;
+    const links = inputs.map(input => graphLink(input.link, node));
+    if (links[audioIndex]?.type !== "STRING") return;
+    const pending = [];
+    for (let index = audioIndex; index < inputs.length; index += 1) {
+        const link = links[index];
+        if (!link) continue;
+        const destination = inputs[index + 1];
+        if (!destination?.widget || link.type !== destination.type) return;
+        pending.push({ link, targetSlot: index + 1 });
+    }
+    const restored = new Map(pending.map(({ link, targetSlot }) => [targetSlot, link.id]));
+    moveMaterialInputLinks(pending, links, inputs.length);
+    // Older frontends keep input.link as a writable data field, not a getter.
+    for (let index = audioIndex; index < inputs.length; index += 1) {
+        if (Object.getOwnPropertyDescriptor(inputs[index], "link")?.writable) {
+            inputs[index].link = restored.get(index) ?? null;
+        }
     }
 }
 function placeMaterialReferenceImages(node) {
@@ -156,12 +240,11 @@ function placeMaterialReferenceImages(node) {
     const remaining = inputs.filter((input) => !references.includes(input));
     const lastFrame = remaining.findIndex((input) => inputBaseName(input) === "last_frame");
     if (lastFrame < 0) return;
-    inputs.splice(0, inputs.length,
+    reorderMaterialInputs(node, [
         ...remaining.slice(0, lastFrame + 1),
         ...references,
         ...remaining.slice(lastFrame + 1),
-    );
-    syncMaterialInputSlots(node);
+    ]);
 }
 function connectedMediaInputs(node, pattern) {
     return (node.inputs ?? []).map((input) => {
@@ -505,6 +588,7 @@ app.registerExtension({
             if (isFace) requestAnimationFrame(() => installFaceControls(this, text));
             else requestAnimationFrame(() => {
                 refreshMaterialReferenceImages(this);
+                refreshMaterialReferenceAudios(this);
                 localizeNode(this, false);
                 installMaterialControls(this);
                 updateMaterialMediaLabels(this);
@@ -519,7 +603,9 @@ app.registerExtension({
                 localizeNode(this, isFace, isLegacyFace);
                 if (isFace) installFaceControls(this, text);
                 else {
+                    restoreMaterialAudioInsertionLinks(this);
                     refreshMaterialReferenceImages(this);
+                    refreshMaterialReferenceAudios(this);
                     installMaterialControls(this);
                     updateMaterialMediaLabels(this);
                 }
@@ -532,6 +618,7 @@ app.registerExtension({
                 const result = connectionsChanged?.apply(this, arguments);
                 requestAnimationFrame(() => {
                     refreshMaterialReferenceImages(this);
+                    refreshMaterialReferenceAudios(this);
                     localizeNode(this, false);
                     updateMaterialMediaLabels(this);
                     this.setDirtyCanvas?.(true, true);
