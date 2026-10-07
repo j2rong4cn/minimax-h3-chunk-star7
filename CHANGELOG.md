@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.18.1 - 2026-10-07
+
+- Replace the Windows SM75 VEDA PyTorch extension with a standalone CUDA C ABI DLL, removing fixed Python/PyTorch binary dependencies.
+- Bundle static CUDA/C++ runtimes, verify library checksum and ABI, and preserve the caller's CUDA stream. Requires a CUDA-13-compatible NVIDIA driver.
+- Preserve SM80+ Triton dispatch, normal H3 and chunked CK integration, and disabled-node passthrough. Add native-library regression checks.
+
 ## 2.18.0 - 2026-10-06
 
 - Integrate optional VEDA sparse attention with SM75 native CUDA and SM80+ upstream Triton dispatch; support ordinary H3 sampling and Star7 chunked CK.

@@ -1,9 +1,7 @@
 """VEDA block routes on the SM75 INT8 Tensor Core kernel."""
-import importlib.util
-import pathlib
-import sys
 import torch
 from . import base
+from ..kernels.native.runtime import Kernel
 
 class TorchGatherBackend(base.Backend):
     name = 'star7-cuda-int8'
@@ -13,13 +11,13 @@ class TorchGatherBackend(base.Backend):
     chunk_share = 16
 
     def __init__(self):
-        filename = '_star7_veda_sm75.pyd' if sys.platform == 'win32' else '_star7_veda_sm75.so'
-        path = pathlib.Path(__file__).resolve().parents[1] / 'kernels/native' / filename
-        if not path.is_file():
-            raise base.BackendUnavailable('Missing bundled Star7 VEDA SM75 kernel')
-        spec = importlib.util.spec_from_file_location('_star7_veda_sm75', path)
-        self.kernel = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.kernel)
+        try:
+            self.kernel = Kernel()
+        except (OSError, RuntimeError, ValueError) as error:
+            raise base.BackendUnavailable(
+                f'Independent SM75 CUDA library failed to load: {error}. '
+                'Update the bundled DLL and manifest together; a compatible NVIDIA '
+                'driver is required. No fixed Python/PyTorch build is required.') from error
 
     def attend(self, q, k, v, block_mask, layout):
         slots, heads, dim = q.shape

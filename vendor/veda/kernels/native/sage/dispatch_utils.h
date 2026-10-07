@@ -15,7 +15,7 @@
  */
 
 #pragma once
-#include "torch_compat.h"
+#include "../cuda_checks.h"
 #include <cuda_runtime.h>
 #include <cstdlib>
 #include <cstdint>
@@ -36,23 +36,23 @@ inline void configure_dynamic_shared_memory(
     Kernel kernel, size_t requested_bytes, const char *kernel_name) {
   int device = 0;
   cudaError_t error = cudaGetDevice(&device);
-  TORCH_CHECK(error == cudaSuccess,
+  VEDA_CHECK(error == cudaSuccess,
               kernel_name, " could not query the CUDA device: ",
               cudaGetErrorString(error));
   int optin_limit = 0;
   error = cudaDeviceGetAttribute(
       &optin_limit, cudaDevAttrMaxSharedMemoryPerBlockOptin, device);
-  TORCH_CHECK(error == cudaSuccess,
+  VEDA_CHECK(error == cudaSuccess,
               kernel_name, " could not query dynamic shared memory: ",
               cudaGetErrorString(error));
-  TORCH_CHECK(requested_bytes <= static_cast<size_t>(optin_limit),
+  VEDA_CHECK(requested_bytes <= static_cast<size_t>(optin_limit),
               kernel_name, " requests ", requested_bytes,
               " bytes of dynamic shared memory, but device ", device,
               " supports ", optin_limit);
   error = cudaFuncSetAttribute(
       kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
       static_cast<int>(requested_bytes));
-  TORCH_CHECK(error == cudaSuccess,
+  VEDA_CHECK(error == cudaSuccess,
               kernel_name, " could not opt in to ", requested_bytes,
               " bytes of dynamic shared memory: ", cudaGetErrorString(error));
 }
@@ -179,19 +179,6 @@ inline void report_cuda_kernel_profile(
     std::ostringstream err_msg;                                  \
     err_msg << "Unsupported causal mode: " << int(return_lse);   \
     throw std::invalid_argument(err_msg.str());                  \
-  }
-
-#define DISPATCH_PYTORCH_DTYPE_TO_CTYPE_FP16(pytorch_dtype, c_type, ...)                \
-  if (pytorch_dtype == at::ScalarType::Half) {                                          \
-    using c_type = half;                                                                \
-    __VA_ARGS__                                                                         \
-  } else if (pytorch_dtype == at::ScalarType::BFloat16) {                               \
-    using c_type = nv_bfloat16;                                                         \
-    __VA_ARGS__                                                                         \
-  } else {                                                                              \
-    std::ostringstream oss;                                                             \
-    oss << SAGE_FUNC_NAME << " failed to dispatch data type " << pytorch_dtype;         \
-    TORCH_CHECK(false, oss.str());                                                      \
   }
 
 #define DISPATCH_BLOCK_SIZE(block_size, BLOCK_SIZE, ...)        \

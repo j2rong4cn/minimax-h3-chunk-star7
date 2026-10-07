@@ -392,4 +392,4 @@ VEDA 节点顶部的「启用 VEDA」开关关闭时直接透传模型，不加�
 
 实时预览按每秒帧数（1–24，默认 5）覆盖整段视频：10 秒约 50 帧。TAEH3 时间状态连续更新，但未选中的帧跳过最后的空间上采样/RGB 卷积、搬运与编码；保留帧与完整解码对应帧一致。预览长边在 RGB 解码后缩放，不降低时间状态部分的解码分辨率；压缩质量只影响编码。
 
-SM75 预编译 VEDA 内核面向 Windows x64 和已测试的嵌入式 Python/PyTorch 环境；其他版本需要在 CUDA 编译环境中用 `vendor/veda/kernels/native/build.py` 重新编译。
+2.18.1 的 Windows x64 VEDA 内核使用独立 CUDA DLL，不再绑定固定 Python / PyTorch C++ ABI，无需复制 Python 的 `include`、`libs` 或自行编译。CUDA 与 C++ 运行时已静态链接；需要支持 CUDA 13 的 NVIDIA 驱动和可用的 CUDA PyTorch 环境。更新节点后重启 ComfyUI，DLL 与校验清单需一并更新。SM80+ 保留原 Triton 路线。已通过 RTX 2080 Ti 内核数值及普通 / CK 调用测试；RTX 2060 尚需实机验证，未提供 VEDA SM75 Linux 预编译库。

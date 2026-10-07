@@ -217,10 +217,10 @@ The default preview uses 5 frames per second across the complete timeline at a 5
 
 Star7 code is distributed under the [MIT License](LICENSE). Bundled NVIDIA Sol-Attn source is distributed under its [Apache 2.0 license and third-party notices](vendor/sol_attn/THIRD_PARTY_NOTICES.md). The H3 AdaLN curve grid and adaptation provenance are documented in the [Larryvrh H3 Turbo notice](vendor/LARRYVRH-H3-TURBO-NOTICE.md).
 
-## VEDA and live preview (2.18.0)
+## VEDA and live preview (2.18.1)
 
 VEDA has an enable switch and works with normal H3 sampling or Star7 chunked CK. Disable it to pass the model through without loading the predictor or installing its patch. SM75 uses the bundled Star7 CUDA INT8 QK / FP16 PV kernel; SM80+ uses upstream Triton. Do not combine VEDA with another sparse-attention backend. Predictor: `models/veda/minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors`. Diagnostics are logged instead of displayed in the node. Speed varies by workload.
 
 TAEH3 previews retain native latent resolution and continuous temporal state. FPS (1-24, default 5) selects frames before the final spatial/RGB decoder tail, transfer and encoding; temporal-state computation still runs. A 10-second video at 5 FPS shows about 50 frames. The 256/384/512/768/1024 long-edge cap is applied after RGB decoding. WebP quality (1-100) affects compression only. Neither setting changes final output resolution. Older workflows retain quality 76; new nodes default to 80.
 
-The bundled SM75 binary targets Windows x64 and the tested embedded Python/PyTorch runtime. Other builds require recompilation with `vendor/veda/kernels/native/build.py`. Third-party licenses and sources are included in `vendor/veda/LICENSE` and `vendor/veda/NOTICE.md`.
+Since 2.18.1, Windows x64 VEDA uses a standalone CUDA DLL with no fixed Python/PyTorch C++ ABI dependency. Python headers, import libraries and local compilation are unnecessary. CUDA and C++ runtimes are statically linked; a CUDA-13-compatible NVIDIA driver and working CUDA-enabled PyTorch are required. Update the DLL and checksum manifest together, then restart ComfyUI. SM80+ retains upstream Triton. RTX 2080 Ti kernel numerical checks and normal/CK integration tests passed; RTX 2060 still requires device-side validation. No VEDA SM75 Linux binary is bundled. Third-party licenses and sources are included in `vendor/veda/LICENSE` and `vendor/veda/NOTICE.md`.

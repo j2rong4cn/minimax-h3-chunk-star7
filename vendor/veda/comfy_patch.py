@@ -94,7 +94,7 @@ class VedaPatch:
                 notify=self.status.show)
             if resolution.backend is None:
                 self.status.warn(
-                    f'Veda off: no sparse kernel works on '
+                    f'Veda off: sparse backend unavailable on '
                     f'{resolution.device.label}; using full attention\n'
                     f'{resolution.report()}')
                 self._engines[key] = None

@@ -21,7 +21,7 @@
 #include "../math.cuh"
 #include "attn_utils.cuh"
 #include "dispatch_utils.h"
-#include "torch_compat.h"
+#include "../cuda_checks.h"
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -1791,14 +1791,14 @@ __global__ void sparse_attention_kernel(
 void check_launch(const char *name)
 {
   const cudaError_t error = cudaGetLastError();
-  TORCH_CHECK(error == cudaSuccess, name, " launch failed: ", cudaGetErrorString(error));
+  VEDA_CHECK(error == cudaSuccess, name, " launch failed: ", cudaGetErrorString(error));
 }
 
 int current_cuda_device_major()
 {
   int device = 0;
   const cudaError_t device_error = cudaGetDevice(&device);
-  TORCH_CHECK(
+  VEDA_CHECK(
       device_error == cudaSuccess,
       "unable to query the current CUDA device: ",
       cudaGetErrorString(device_error));
@@ -1812,7 +1812,7 @@ int current_cuda_device_major()
   int device_major = 0;
   const cudaError_t capability_error = cudaDeviceGetAttribute(
       &device_major, cudaDevAttrComputeCapabilityMajor, device);
-  TORCH_CHECK(
+  VEDA_CHECK(
       capability_error == cudaSuccess,
       "unable to query the current CUDA capability: ",
       cudaGetErrorString(capability_error));
@@ -1821,99 +1821,4 @@ int current_cuda_device_major()
   return cached_major;
 }
 
-template <int HeadDim, typename T, bool UseW8A8, int KeyStages,
-          bool SparseValuePipeline = false>
-void launch_sla_attention(
-    at::Tensor query_int8,
-    at::Tensor key_int8,
-    at::Tensor value,
-    at::Tensor value_int8,
-    at::Tensor value_scale,
-    at::Tensor output,
-    at::Tensor query_scale,
-    at::Tensor key_scale,
-    at::Tensor route_words,
-    at::Tensor sparse_query_blocks,
-    at::Tensor selected_count,
-    at::Tensor key_valid,
-    float softmax_scale)
-{
-  using G = AttentionGeometry<HeadDim>;
-  using S = AttentionStorage<HeadDim, SparseValuePipeline>;
-  const int batch_size = query_int8.size(0);
-  const int num_query_heads = query_int8.size(1);
-  const int num_kv_heads = key_int8.size(1);
-  const int query_length = query_int8.size(2);
-  const int key_length = key_int8.size(2);
-  const int num_query_blocks = div_ceil(query_length, kBlockTokens);
-  const int num_key_blocks = div_ceil(key_length, kBlockTokens);
-  dim3 attention_grid(num_query_blocks, num_query_heads, batch_size);
-  dim3 attention_block(WARP_SIZE, kWarps);
-  auto attention_kernel =
-      sparse_attention_kernel<HeadDim, T, UseW8A8, false, false, false,
-                              1, KeyStages, true, SparseValuePipeline>;
-  configure_dynamic_shared_memory(
-      attention_kernel, S::kAttentionSharedBytes, "SLA sparse attention");
-  attention_kernel<<<
-      attention_grid,
-      attention_block,
-      S::kAttentionSharedBytes,
-      c10::cuda::getCurrentCUDAStream()>>>(
-      query_int8.data_ptr<int8_t>(),
-      key_int8.data_ptr<int8_t>(),
-      reinterpret_cast<const T *>(value.data_ptr()),
-      UseW8A8 ? value_int8.data_ptr<int8_t>() : nullptr,
-      UseW8A8 ? value_scale.data_ptr<float>() : nullptr,
-      reinterpret_cast<T *>(output.data_ptr()),
-      query_scale.data_ptr<float>(),
-      key_scale.data_ptr<float>(),
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      sparse_query_blocks.data_ptr<uint8_t>(),
-      nullptr,
-      reinterpret_cast<const uint32_t *>(route_words.data_ptr<int32_t>()),
-      selected_count.numel()
-          ? reinterpret_cast<unsigned long long *>(selected_count.data_ptr<int64_t>())
-          : nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      key_valid.data_ptr<int32_t>(),
-      query_length,
-      key_length,
-      num_query_heads,
-      num_kv_heads,
-      num_query_blocks,
-      num_key_blocks,
-      0,
-      query_int8.stride(0),
-      query_int8.stride(1),
-      query_int8.stride(2),
-      key_int8.stride(0),
-      key_int8.stride(1),
-      key_int8.stride(2),
-      value.stride(0),
-      value.stride(1),
-      value.stride(2),
-      UseW8A8 ? value_int8.size(3) : 0,
-      0,
-      output.stride(0),
-      output.stride(1),
-      output.stride(2),
-      0.0f,
-      softmax_scale,
-      0);
-  check_launch("SLA sparse attention");
-}
-
-
 } // namespace
-void veda_attention(at::Tensor q, at::Tensor k, at::Tensor v, at::Tensor out,
-                    at::Tensor qs, at::Tensor ks, at::Tensor routes, at::Tensor valid) {
-  auto policy=at::ones({(q.size(2)+63)/64},q.options().dtype(at::kByte));
-  auto empty=at::empty({0},q.options().dtype(at::kFloat));
-  auto empty_stats=at::empty({0},q.options().dtype(at::kLong));
-  launch_sla_attention<128,half,false,1>(q,k,v,empty,empty,out,qs,ks,routes,policy,empty_stats,valid,0.08838834764831845f);
-}

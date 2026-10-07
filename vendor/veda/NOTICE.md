@@ -16,3 +16,5 @@
 * **Icon** — the Miowtion logo (`assets/icon.svg`), MIT.
 
 * **SageAttention / local Star7 Turing adaptation** — `kernels/native` uses the Apache-2.0 INT8 Tensor Core online-softmax implementation, adapted to accept VEDA route words and per-token padding validity. Quantization runs once per head group. License: `kernels/native/LICENSE.Apache-2.0`.
+
+* **Star7 CUDA C ABI bridge** — the SM75 wrapper and ctypes loader use public tensor addresses and CUDA streams, without ATen or CPython bindings. The Windows library statically links the CUDA runtime; a compatible NVIDIA driver remains required. See `kernels/native/README.md` for build and validation scope.
