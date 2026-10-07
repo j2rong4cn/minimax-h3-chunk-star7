@@ -10,6 +10,7 @@ the trained defaults. Runtime status and diagnostics are reported in the console
 from __future__ import annotations
 
 import os
+import threading
 
 import comfy.model_management
 import comfy.patcher_extension
@@ -25,6 +26,8 @@ from . import status as veda_status
 from .core import bundle as veda_bundle
 
 FOLDER = 'veda'
+_BUNDLES = {}
+_BUNDLE_LOCK = threading.Lock()
 
 
 def register_model_folder() -> str:
@@ -72,7 +75,16 @@ def _predictor_path(name: str) -> str:
 
 
 def _bundle(path: str) -> veda_bundle.PredictorBundle:
-    return veda_bundle.load_bundle(path)
+    stamp = os.stat(path)
+    stamp = (stamp.st_mtime_ns, stamp.st_size)
+    with _BUNDLE_LOCK:
+        cached = _BUNDLES.get(path)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        bundle = veda_bundle.load_bundle(path)
+        _BUNDLES.clear()
+        _BUNDLES[path] = (stamp, bundle)
+        return bundle
 
 
 def _check_model(model, bundle) -> tuple[int, int, int]:
@@ -168,15 +180,18 @@ class VedaSparseAttention(io.ComfyNode):
         info = hardware.describe(device)
         probe = backends.probe(device)
         usable = [display for _, display, error in probe if error is None]
-        lines = [f'Star7 VEDA ready · {usable[0] if usable else "full attention"}'
+        lines = [f'Ready · {usable[0] if usable else "full attention"}'
                  f' · {info.short_name}',
                  f'Sparsity: {settings.describe()}']
         full = settings.describe_full_attention()
         if full:
             lines.append(f'Full attention: {full}')
         if info.kind == 'cuda' and any(error for _, _, error in probe):
-            lines.append('Tip: pip install triton (triton-windows on '
-                         'Windows) for the sparse kernel')
+            if info.cc == (7, 5):
+                lines.append('SM75: check the bundled CUDA DLL, manifest and NVIDIA driver; Triton is not used.')
+            else:
+                lines.append('Tip: pip install triton (triton-windows on '
+                             'Windows) for the sparse kernel')
         if verbose:
             lines.append(f'Predictor: {bundle.describe()}')
             lines += [f'  {name}: {error or "available"}'

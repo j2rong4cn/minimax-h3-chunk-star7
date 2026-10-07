@@ -98,6 +98,9 @@ class PhaseTimer:
         return {name: sum(s.elapsed_time(e) for s, e in pairs)
                 for name, pairs in self._events.items()}
 
+    def reset(self) -> None:
+        self._events.clear()
+
 
 def _no_timer(name: str):
     del name
@@ -177,6 +180,8 @@ class VedaEngine:
                                           shape))
             layout = tiling.build_tile_layout(spans, spec.seq_len,
                                               self.device)
+            if len(self._tile_layouts) >= 8:
+                self._tile_layouts.clear()
             self._tile_layouts[key] = layout
         return layout
 
@@ -215,7 +220,7 @@ class VedaEngine:
     @torch.no_grad()
     def attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
                   layer: int, spec: h3_layout.LayoutSpec,
-                  plan: veda_plans.TilePlan) -> torch.Tensor:
+                  plan: veda_plans.TilePlan, head_chunks: int = 1) -> torch.Tensor:
         """Veda block-sparse attention of one layer.
 
         Args:
@@ -236,13 +241,20 @@ class VedaEngine:
         proj_q, proj_k = self._weights(layer)
         chunk_bytes = self._chunk_bytes()
         chunks = 0
+        self.chunking['heads_per_chunk'] = 0
+        measuring = self.device.type == 'cuda'
+        baseline = torch.cuda.memory_allocated(self.device) if measuring else 0
         for group in plan.head_groups(layer, self.device):
             layout = self._tile_layout(spec, group.shape)
             blocks = selection.column_blocks(layout, self.generated,
                                              self.reference)
             per_head = layout.num_slots * dim * q.element_size()
             step = max(1, chunk_bytes // per_head)
-            self.chunking['heads_per_chunk'] = min(step, len(group.heads))
+            step = min(step, max(1, out.numel() * out.element_size() // (per_head * 6)))
+            if head_chunks > 1:
+                step = min(step, -(-heads // head_chunks))
+            self.chunking['heads_per_chunk'] = max(
+                self.chunking['heads_per_chunk'], min(step, len(group.heads)))
             for heads_chunk in group.heads.split(step):
                 chunks += 1
                 with timer('gather'):
@@ -263,6 +275,10 @@ class VedaEngine:
                     v_t = tiling.gather_tiles(v, layout, heads_chunk)
                 with timer('attend'):
                     o_t = self.backend.attend(q_t, k_t, v_t, mask, layout)
+                if measuring:
+                    self.chunking['workspace_bytes'] = max(
+                        self.chunking.get('workspace_bytes', 0),
+                        torch.cuda.memory_allocated(self.device) - baseline)
                 del q_t, k_t, v_t, mask
                 with timer('scatter'):
                     tiling.scatter_tiles_(out, o_t, layout, heads_chunk)

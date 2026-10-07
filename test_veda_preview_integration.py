@@ -35,7 +35,9 @@ assert NODE_CLASS_MAPPINGS['Star7VedaSparseAttention'].INPUT_TYPES()['required']
 code = ast.parse((ROOT / 'nodes.py').read_text(encoding='utf-8'))
 func = next(n for n in code.body if isinstance(n, ast.FunctionDef) and n.name == '_minimax_ck_int8_attention_forward')
 q = torch.randn(1, 2, 384, 128, device='cuda', dtype=torch.float16)
-ns = {'_prepare_h3_qkv_chunked': lambda *a, **kw: (q, q.clone(), q.clone()), '_log_h3_cuda_memory': lambda *a, **kw: None}
+from star7_chunk_test import h3_preprocess
+ns = {'_prepare_h3_qkv_chunked': lambda *a, **kw: (q, q.clone(), q.clone()), '_log_h3_cuda_memory': lambda *a, **kw: None,
+      'h3_preprocess': h3_preprocess, '_CONFIG': {'effective_qkv_chunk_tokens':8192}}
 exec(compile(ast.Module(body=[func], type_ignores=[]), str(ROOT/'nodes.py'), 'exec'), ns)
 veda = VedaPatch(types.SimpleNamespace(num_layers=50, num_heads=2, head_dim=128), VedaSettings(Budget(ratio=.1), Budget(ratio=.1)), None)
 hit = []

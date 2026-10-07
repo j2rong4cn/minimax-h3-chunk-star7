@@ -23,7 +23,7 @@ def _load():
     global _LIBRARY
     if _LIBRARY is not None:
         return _LIBRARY
-    manifest = json.loads((ROOT / 'bin/veda_sm75_manifest.json').read_text())
+    manifest = json.loads((ROOT / 'bin/veda_sm75_manifest.json').read_text(encoding='utf-8-sig'))
     platform = 'windows_x64' if sys.platform == 'win32' else 'linux_x86_64'
     if platform not in manifest:
         raise RuntimeError(f'No bundled VEDA SM75 binary for {platform}; build.py can build the CUDA library')

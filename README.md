@@ -28,6 +28,7 @@ Attention choices include preserving an upstream backend, Comfy Kitchen INT8, ar
 | QKV / RoPE / MLP 独立分块 | 分别控制三处临时显存峰值，保留 MiniMax H3 原 block、权重、LoRA 和条件布局 |
 | 智能显存降档 | 仅在可缩小的分块阶段 OOM 时，将对应分块值减半重试，其他参数保持不变 |
 | 多种注意力后端 | 支持 `existing`、Comfy Kitchen INT8、SLA、Sol 和 CK/Sparse/CK Hybrid |
+| H3 W4A8 模型支持 | 增强载入保留 `asym_w4a8_int8` 量化布局；SM75 提供原生码本 W4A8 线性层优化，可搭配 CK 分块与 VEDA |
 | 架构专用稀疏内核 | SM75 使用随节点分发的原生 CUDA 内核；SM80+ 使用 Triton 或 NVIDIA 官方 Sol-Attn 路径 |
 | 数值检查与定位 | 在完整 Transformer block 和 H3 视频/音频输出处检查 NaN/Inf，并提供 QKV、attention、`out_proj`、MLP 分段诊断 |
 | 轻量辅助节点 | 附带参考图像、参考视频和提示词载入；支持将对应文件直接拖入节点，参考图像可按常用横竖比例自动进行最大保留裁切，且不影响核心模型补丁 |
@@ -120,6 +121,16 @@ RTX 20 系建议配合 [MiniMax H3 FP16 Exact Fix - Star7](https://github.com/st
 - SM80+ 单独 Sol 优先从 `sol_sm80+_bf16_official` 开始；All-INT8 只应在同配置 A/B 测试后采用。
 - 稀疏模式并非所有分辨率、时长和显卡上都必然快于 CK，应比较同模型、同 seed、同帧数、同步数和同卸载策略下的采样耗时。
 
+## W4A8 模型支持
+
+增强载入节点支持使用 ComfyUI `asym_w4a8_int8` 格式的 H3 混合精度模型，包括 `minimax_h3_ref2va_pruned_w4a8_mixed.safetensors` 和 `minimax_h3_fl2va_pruned_w4a8_mixed.safetensors`。将模型放入已配置的 `diffusion_models` / `unet` 搜索目录，使用「MiniMax H3 增强载入 - Star7」选择模型；文本编码器、VAE 和采样条件继续使用对应 H3 工作流的原有节点。环境需提供 ComfyUI 与 Comfy Kitchen 的 `AsymW4A8Int8Layout` 支持。
+
+SM75 原生优化适用于受支持的 16 值码本、ConvRot 256、分组尺度布局；不满足原生优化条件的层保留上游量化计算路径。QKV / MLP 分块可复用权重，减少重复准备。W4A8 与 VEDA 作用于不同环节，可搭配 VEDA + CK 分块；不要再叠加 SLA / Sol / VSA 等其他稀疏注意力。
+
+W4A8 原生 GEMM、VEDA 与预处理均使用独立 CUDA DLL，不链接 Python / PyTorch C++ ABI，无需固定 CPython 3.12，也不要求用户安装编译工具或 Python 开发文件。需要 Windows x64、兼容 CUDA 13 的 NVIDIA 驱动，以及具备对应模型格式支持的 CUDA PyTorch / Comfy Kitchen 环境。DLL 与校验清单须一起更新；库不可用时保留上游路径并写明原因。这里的支持不等于兼容任意 INT4 / QuantFunc 模型，也不保证比 INT8 更快；峰值显存、速度与画质应按相同参数比较。
+
+SM75 的受保护 FP16 W4A8 路线融合 SwiGLU、缩放和转换，减少 FP32 临时张量。独立 CK 分块在显存压力下可提前压缩 Q/K，保留全序列 9 点 K 锚定规则，并在首次使用时核对当前 Kitchen 的量化结果。显存充足或连接注意力 override（包括 VEDA）时保持原 QKV 路线；VEDA 预测器继续读取浮点特征，并使用独立的工作区限制和缓存。无需新增节点或参数。
+
 ## 环境与分发
 
 - SM75 Windows x64：节点内置预编译 CUDA 13 静态运行时 DLL，需要支持 CUDA 13 的 NVIDIA 580+ 驱动。
@@ -161,6 +172,7 @@ git clone https://github.com/star7code/minimax-h3-chunk-star7.git
 |---|---|
 | `MiniMax H3 增强载入 - Star7` | 分块项目内置的独立 H3 模型载入节点；按 GPU 架构选择受保护 FP16 或原生 BF16，保留量化分发，并使用独立类 ID 避免与 FP16 项目冲突 |
 | `MiniMax H3 VDN 加速 - Star7` | 加载完整 VDN stage，自动安装混合注意力与配套 Adapter；支持 8 步 DMD 和 50 步原始模式 |
+| `MiniMax H3 VEDA 稀疏注意力 - Star7` | 可选的预测器驱动稀疏注意力；支持普通 H3 采样和 CK 分块，SM75 使用独立 CUDA DLL，SM80+ 使用 Triton；关闭时直接透传模型，诊断只写日志 |
 | `MiniMax H3 显存分块加速 - Star7` | QKV/RoPE/MLP 分块、注意力输出显存保护、自动降档和注意力加速选择 |
 | `MiniMax H3 实时预览 - Star7` | 每个采样步骤后用 TAEH3 显示覆盖完整时间轴的循环动画 |
 | `参考视频载入 - Star7` | 支持直接拖入视频，完成载入、时间范围裁切和最长边限制，输出同一时间窗的画面与音频 |
@@ -375,8 +387,6 @@ STAR7_SLA_LONG_SELF_TEST=1
 
 - [通用工作流（中文）](examples/workflows/MiniMax-H3-Activation-Chunk-Star7.json)：包含多合一条件载入、分块、实时预览、独立 H3 分块解码和默认关闭的可选二采；导入后可直接作为普通工作流使用。
 - [General workflow (English)](examples/workflows/MiniMax-H3-Activation-Chunk-Star7-English.json)：完整翻译的英文画布与说明版本，功能和默认设置与中文版一致。
-
-示例中的参考条件来自 [T8mars/comfyui-minimax-h3-audio-T8](https://github.com/T8mars/comfyui-minimax-h3-audio-T8)。仓库不包含可能涉及版权或隐私的参考素材，导入工作流后请替换占位文件。
 
 ## License
 

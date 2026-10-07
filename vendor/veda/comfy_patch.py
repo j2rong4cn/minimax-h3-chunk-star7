@@ -44,6 +44,27 @@ except ImportError:  # older ComfyUI: nothing to pause
     _pause_malloc_graph = contextlib.nullcontext
 
 _KEY = 'veda_sparse_attention'
+_LOG = logging.getLogger('Star7-H3-VEDA')
+
+
+def _by_head_groups(attend, q, chunks, skip_output_reshape):
+    batch, heads, length, dim = q.shape
+    chunks = min(chunks, heads)
+    output = None
+    start = 0
+    for index in range(chunks):
+        end = start + heads // chunks + (index < heads % chunks)
+        part = attend(start, end)
+        if output is None:
+            shape = (batch, heads, length, dim) if skip_output_reshape else (batch, length, heads * dim)
+            output = part.new_empty(shape)
+        if skip_output_reshape:
+            output[:, start:end] = part
+        else:
+            output[..., start * dim:end * dim] = part
+        del part
+        start = end
+    return output
 _TIMED_PHASES = (('gather', 'gather'), ('score', 'score'),
                  ('select', 'select'), ('attend', 'kernel'),
                  ('scatter', 'scatter'))
@@ -63,6 +84,7 @@ class _Run:
         self.evaluations = 0          # model calls (layer 0 reached)
         self.video = None             # e.g. '1344x768 · 5.2 s'
         self.failed = None            # error text if the sparse path failed
+        self.prepared = False
         self.announced: set = set()
 
 
@@ -94,7 +116,7 @@ class VedaPatch:
                 notify=self.status.show)
             if resolution.backend is None:
                 self.status.warn(
-                    f'Veda off: sparse backend unavailable on '
+                    f'Disabled: sparse backend unavailable on '
                     f'{resolution.device.label}; using full attention\n'
                     f'{resolution.report()}')
                 self._engines[key] = None
@@ -106,7 +128,7 @@ class VedaPatch:
                     timer = engine.enable_timing()
                     if timer is not None:
                         self._timers[key] = timer
-                    logging.info('Veda: backends on %s: %s',
+                    _LOG.info('[Star7 H3 VEDA] Backends on %s: %s',
                                  resolution.device.label, resolution.report())
                 self._engines[key] = engine
         return self._engines[key]
@@ -142,9 +164,16 @@ class VedaPatch:
                 kw = dict(mask=mask, attn_precision=attn_precision,
                           skip_reshape=skip_reshape,
                           skip_output_reshape=skip_output_reshape, **kwargs)
-                if previous is None:
-                    return func(q, k, v, heads, **kw)
-                return previous(func, q, k, v, heads, **kw)
+                def attend(q, k, v, count):
+                    if previous is None:
+                        return func(q, k, v, count, **kw)
+                    return previous(func, q, k, v, count, **kw)
+                chunks = options.get('veda_held_head_chunks', 1)
+                if chunks > 1 and skip_reshape and q.ndim == 4 and q.shape == k.shape == v.shape:
+                    return _by_head_groups(
+                        lambda start, end: attend(q[:, start:end], k[:, start:end], v[:, start:end], end - start),
+                        q, chunks, skip_output_reshape)
+                return attend(q, k, v, heads)
 
             options = kwargs.get('transformer_options') or {}
             layout = options.get('minimax_h3_layout')
@@ -166,9 +195,9 @@ class VedaPatch:
                 if _is_interrupt(error):
                     raise
                 patch.run.failed = f'{type(error).__name__}: {error}'
-                logging.error('Veda: sparse attention failed', exc_info=True)
+                _LOG.error('[Star7 H3 VEDA] Sparse attention failed', exc_info=True)
                 patch.status.warn(
-                    'Veda hit an error and finishes this run with full '
+                    'Finishing this run with full '
                     f'attention:\n{patch.run.failed}')
                 return dense('error')
 
@@ -184,7 +213,7 @@ class VedaPatch:
             return 'layer outside the predictor'
         if q.shape[1] != bundle.num_heads or q.shape[3] != bundle.head_dim:
             self._announce(('shape', tuple(q.shape)),
-                           f'Veda off: the model has {q.shape[1]} heads of '
+                           f'Disabled: the model has {q.shape[1]} heads of '
                            f'dim {q.shape[3]}, the predictor expects '
                            f'{bundle.num_heads} x {bundle.head_dim}',
                            warn=True)
@@ -212,7 +241,7 @@ class VedaPatch:
             spec = engine.layout_spec(layout)
         except h3_layout.LayoutError as error:
             self._announce(('layout', str(error)),
-                           f'Veda off for this video: cannot read the H3 '
+                           f'Disabled for this video: cannot read the H3 '
                            f'layout ({error})', warn=True)
             return dense('layout')
         choice = engine.plan_for(spec)
@@ -222,7 +251,8 @@ class VedaPatch:
         batch, heads, seq_len, dim = q.shape
         out = engine.attention(q[0].transpose(0, 1), k[0].transpose(0, 1),
                                v[0].transpose(0, 1), options['block_index'],
-                               spec, choice.plan)
+                               spec, choice.plan,
+                               head_chunks=options.get('veda_held_head_chunks', 1))
         self.run.calls['sparse'] += 1
         if skip_output_reshape:
             return out.transpose(0, 1).unsqueeze(0)
@@ -231,7 +261,7 @@ class VedaPatch:
     # -- node text ---------------------------------------------------------
 
     def _running_text(self, engine, spec, choice) -> str:
-        lines = [f'Veda running · {engine.backend.display}',
+        lines = [f'Running · {engine.backend.display}',
                  f'Video: {veda_plans.describe_grid(spec.target.grid)}',
                  f'Tile plan: {choice.how}']
         lines.append(f'Sparsity: {self.settings.describe()}')
@@ -258,8 +288,8 @@ class VedaPatch:
         if not sparse and not full:
             return None
         backend = engines[0].backend.display if engines else 'full attention'
-        headline = ('Veda done' if sparse and not run.failed
-                    else 'Veda done, fell back to full attention')
+        headline = ('Done' if sparse and not run.failed
+                    else 'Done; fell back to full attention')
         lines = [f'{headline} · {backend}']
         if run.video:
             lines.append(f'Video: {run.video}')
@@ -307,6 +337,9 @@ class VedaPatch:
                     f'Chunks: {chunking["chunks_per_layer"]} per layer, '
                     f'{chunking["heads_per_chunk"]} heads each'
                     + (f' ({free / 2**30:.1f} GB free)' if free else ''))
+                workspace = chunking.get('workspace_bytes')
+                if workspace:
+                    lines.append(f'Attention workspace: {workspace / 2**20:.0f} MB')
         reasons = ', '.join(f'{r} {n}' for r, n in sorted(run.calls.items())
                             if r != 'sparse')
         lines.append(f'Attention calls: {run.calls.get("sparse", 0)} sparse'
@@ -325,6 +358,11 @@ class VedaPatch:
     def install(self, transformer_options: dict) -> None:
         """Puts the override on top of whatever override is on the hook;
         idempotent once it is on top."""
+        self.run.prepared = True
+        chunks = transformer_options.get('minimax_head_chunks')
+        if isinstance(chunks, int) and chunks > 1:
+            transformer_options['veda_held_head_chunks'] = chunks
+            transformer_options['minimax_head_chunks'] = 1
         current = transformer_options.get('optimized_attention_override')
         if current in self.installed:
             return
@@ -337,9 +375,15 @@ class VedaPatch:
         summary = self._summary()
         if summary:
             self.status.show(summary)
+        elif self.run.prepared:
+            self.status.warn('Not used: no H3 attention call reached the override. '
+                             'Check nodes replacing attention after Veda.')
         for engine in self._engines.values():
             if engine is not None:
-                engine.reset()
+                engine.stats = veda_engine.Stats()
+                engine.chunking.clear()
+        for timer in self._timers.values():
+            timer.reset()
         self.run = _Run()
 
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.18.2 - 2026-10-07
+
+- Limit VEDA workspaces while preserving SM75 budgets, cache one predictor and bounded layouts, retain low-VRAM head grouping, and report unused overrides in logs.
+- Add pressure-triggered SM75 CK Q/K compression during projection, preserving the global nine-sample K anchor and Kitchen attention arithmetic. Attention overrides, including VEDA, keep their floating feature path.
+- Fuse protected FP16 W4A8 SwiGLU, rescaling and casting. Add native-library checks and GPU regressions for compact attention, cache lifecycle and the mixed W4A8 model.
+- Document W4A8 support and add VEDA to both node summaries.
+- Standardize VEDA and preprocessing log prefixes, preserve diagnostic text, and suppress repeated status messages.
+- Replace the W4A8 CPython/PyTorch GEMM extension with an independent CUDA C ABI library; preserve quantization, grouped scales, bias and staged/inline execution.
+
 ## 2.18.1 - 2026-10-07
 
 - Replace the Windows SM75 VEDA PyTorch extension with a standalone CUDA C ABI DLL, removing fixed Python/PyTorch binary dependencies.

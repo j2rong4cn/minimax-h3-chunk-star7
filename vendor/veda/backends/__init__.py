@@ -35,6 +35,7 @@ from .. import hardware
 _MODULES = {'triton-int8': 'triton_int8', 'mlx': 'mlx_gather',
             'star7-cuda-int8': 'torch_gather'}
 _MIN_CC = (8, 0)
+_LOG = logging.getLogger('Star7-H3-VEDA')
 
 
 def _load(name: str, info: hardware.DeviceInfo) -> base.Backend:
@@ -102,7 +103,7 @@ def resolve(device: torch.device,
                 attempts.append((name, str(error)))
                 continue
             except Exception as error:  # a broken backend must not crash
-                logging.warning('Veda: backend %s failed to load', name,
+                _LOG.warning('[Star7 H3 VEDA] Backend %s failed to load', name,
                                 exc_info=True)
                 attempts.append((name, f'{type(error).__name__}: {error}'))
                 continue

@@ -16,12 +16,13 @@ import torch
 import torch.nn.functional as F
 
 try:
-    from . import star7_w4a8
+    from . import star7_w4a8, h3_preprocess
 except ImportError:
     import star7_w4a8
+    import h3_preprocess
 
 _LOG = logging.getLogger("MiniMaxH3ActivationChunkStar7")
-NODE_VERSION = "2.17.3"
+NODE_VERSION = "2.18.2"
 FP16_EXACT_PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 HYBRID_ALL_INT8_BACKEND_NAME = "hybrid_sm75_ck_sla_all_int8"
 SM86PLUS_BACKEND_NAME = "sla_sm80+_qk_int8_pv_bf16"
@@ -2234,14 +2235,35 @@ def _minimax_ck_int8_attention_forward(self, x, rope_freqs=None, transformer_opt
     )
 
     s = x.shape[0]
+    compact = (
+        'optimized_attention_override' not in transformer_options
+        and x.dtype == torch.float16 and self.head_dim == 128
+        and s > 1024 and _CONFIG['effective_qkv_chunk_tokens'] >= 256
+        and _CONFIG['effective_qkv_chunk_tokens'] % 128 == 0
+        and h3_preprocess.available(x.device)
+        and h3_preprocess.memory_pressure(x, self.heads)
+        and h3_preprocess.compact_available(x.device)
+    )
     q, k, v = _prepare_h3_qkv_chunked(
-        self, x, rope_freqs, mm, comfy.quant_ops, output_dtype=x.dtype
+        self, x, rope_freqs, mm, comfy.quant_ops, output_dtype=x.dtype,
+        compact_query=compact,
     )
     _log_h3_cuda_memory(
         "after-attention-qkv", x.device,
         block_index=getattr(self, "_star7_block_index", None),
     )
     del x
+
+    if isinstance(q, h3_preprocess.CompactQK):
+        import comfy_kitchen
+        if _CONFIG['verbose'] and transformer_options.get('block_index') == 0:
+            _LOG.info('[Star7 H3 Chunk] Compact Q/K active | global 9-sample K anchor | FP16 V | native CK')
+        packed = q.prequantize_value(k, v)
+        del q, k, v
+        out = comfy_kitchen.int8_attention_from_prequantized(packed)
+        del packed
+        out = out.transpose(1, 2).reshape(1, s, self.heads * self.head_dim).squeeze(0)
+        return self.out_proj(out)
 
     # Stop V sharing the fused QKV storage. CK consumes Q/K after
     # pre-quantization, allowing the much larger QKV allocation to be freed.
@@ -3066,7 +3088,7 @@ def _install_integrated_vsa(model, attention_backend: str, verbose: bool):
 
 def _prepare_h3_qkv_chunked(
     self, x, rope_freqs, mm, quant_ops, output_dtype: Optional[torch.dtype] = None,
-    output_layout: str = "BHLD", raw_capture=None,
+    output_layout: str = "BHLD", raw_capture=None, compact_query=False,
 ):
     """Prepare contiguous backend-layout Q/K/V in token chunks.
 
@@ -3119,15 +3141,14 @@ def _prepare_h3_qkv_chunked(
                 "using per-chunk streaming"
             )
     _set_sequence_status("QKV", sequence)
-    # These complete Q/K/V tensors are required by CK and SLA regardless of
-    # projection chunk size. Retry their allocation once after releasing only
-    # unused allocator cache, but do not pretend that lowering a local chunk can
-    # solve a full-buffer OOM.
+    # The normal path retains full Q/K/V; compact CK keeps packed Q/K and
+    # floating V. Their fixed storage cannot be reduced by shrinking row tiles.
     qkv_buffers = []
     for allocation_attempt in range(2):
         try:
+            shape = (1, heads, sequence, head_dim) if output_layout == 'BHLD' else (1, sequence, heads, head_dim)
             qkv_buffers = [
-                torch.empty(
+                h3_preprocess.CompactQK(shape, x.device) if compact_query else torch.empty(
                     (1, heads, sequence, head_dim)
                     if output_layout == "BHLD"
                     else (1, sequence, heads, head_dim),
@@ -3135,15 +3156,15 @@ def _prepare_h3_qkv_chunked(
                     device=x.device,
                 )
             ]
-            qkv_buffers.append(torch.empty_like(qkv_buffers[0]))
-            qkv_buffers.append(torch.empty_like(qkv_buffers[0]))
+            qkv_buffers.append(None if compact_query else torch.empty(shape, device=x.device, dtype=output_dtype))
+            qkv_buffers.append(torch.empty(shape, device=x.device, dtype=output_dtype))
             break
         except Exception as exc:
             qkv_buffers.clear()
             if not _is_cuda_oom(exc) or allocation_attempt:
                 if _is_cuda_oom(exc):
                     required_gib = (
-                        3 * heads * sequence * head_dim
+                        (2 if compact_query else 3) * heads * sequence * head_dim
                         * torch.empty((), dtype=output_dtype).element_size()
                         / 1024**3
                     )
@@ -3160,6 +3181,22 @@ def _prepare_h3_qkv_chunked(
     q_out, k_out, v_out = qkv_buffers
     del qkv_buffers
     rope_fn = _ORIGINAL_RMS_ROPE_SPLIT_HALF_INPLACE or quant_ops.ck.rms_rope_split_half_
+    if compact_query:
+        positions = torch.arange(9, device=x.device) * (sequence - 1) // 8
+        sample_qkv = qkv_call(x.index_select(0, positions))
+        sample_q, sample_k, _ = sample_qkv.split(heads * head_dim, dim=-1)
+        if rope_freqs is not None:
+            sample_q = sample_q.view(1, 9, heads, head_dim)
+            sample_k = sample_k.view(1, 9, heads, head_dim)
+            rope_fn(sample_q, sample_k, rope_freqs.index_select(1, positions),
+                    mm.cast_to(self.q_norm.weight, device=x.device),
+                    mm.cast_to(self.k_norm.weight, device=x.device),
+                    epsilon=self.q_norm.eps, rot_dim=rope_freqs.shape[-3] * 2)
+            sample_k = sample_k.permute(0, 2, 1, 3)
+        else:
+            sample_k = self.k_norm(sample_k.view(9, heads, head_dim)).permute(1, 0, 2).unsqueeze(0)
+        q_out.prepare_key(sample_k.to(output_dtype))
+        del sample_qkv, sample_q, sample_k, positions
     start = 0
     block_index = getattr(self, "_star7_block_index", None)
     while start < sequence:
@@ -3221,8 +3258,12 @@ def _prepare_h3_qkv_chunked(
                         time.perf_counter() - rope_profile_start
                     ) * 1000.0
                 if output_layout == "BHLD":
-                    q_out[:, :, start:end, :].copy_(q.permute(0, 2, 1, 3))
-                    k_out[:, :, start:end, :].copy_(k.permute(0, 2, 1, 3))
+                    if compact_query:
+                        q_out.write(start, q.permute(0, 2, 1, 3).to(output_dtype))
+                        q_out.write_key(start, k.permute(0, 2, 1, 3).to(output_dtype))
+                    else:
+                        q_out[:, :, start:end, :].copy_(q.permute(0, 2, 1, 3))
+                        k_out[:, :, start:end, :].copy_(k.permute(0, 2, 1, 3))
                 else:
                     q_out[:, start:end, :, :].copy_(q)
                     k_out[:, start:end, :, :].copy_(k)
@@ -3238,8 +3279,12 @@ def _prepare_h3_qkv_chunked(
                     block_index, row_dim=0, check_fp16_range=True,
                 )
                 if output_layout == "BHLD":
-                    q_out[:, :, start:end, :].copy_(q_norm.permute(1, 0, 2).unsqueeze(0))
-                    k_out[:, :, start:end, :].copy_(k_norm.permute(1, 0, 2).unsqueeze(0))
+                    if compact_query:
+                        q_out.write(start, q_norm.permute(1, 0, 2).unsqueeze(0).to(output_dtype))
+                        q_out.write_key(start, k_norm.permute(1, 0, 2).unsqueeze(0).to(output_dtype))
+                    else:
+                        q_out[:, :, start:end, :].copy_(q_norm.permute(1, 0, 2).unsqueeze(0))
+                        k_out[:, :, start:end, :].copy_(k_norm.permute(1, 0, 2).unsqueeze(0))
                 else:
                     q_out[:, start:end, :, :].copy_(q_norm.unsqueeze(0))
                     k_out[:, start:end, :, :].copy_(k_norm.unsqueeze(0))
@@ -3277,7 +3322,7 @@ def _prepare_h3_qkv_chunked(
             allocated = torch.cuda.memory_allocated(x.device) / 1024**3
             reserved = torch.cuda.memory_reserved(x.device) / 1024**3
         fixed_qkv_gib = (
-            3 * sequence * heads * head_dim * torch.empty(
+            (2 if compact_query else 3) * sequence * heads * head_dim * torch.empty(
                 (), dtype=output_dtype
             ).element_size() / 1024**3
         )

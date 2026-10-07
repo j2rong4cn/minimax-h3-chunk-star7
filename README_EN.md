@@ -13,6 +13,7 @@ Run high-quality, long-duration MiniMax H3 video generation on GPUs with limited
 | Independent QKV / RoPE / MLP chunking | Controls the temporary VRAM peak of each stage while preserving the original H3 block, weights, LoRA, and conditioning layout |
 | Targeted OOM reduction | Halves only the chunk size of the stage that actually ran out of memory |
 | Attention selection | Supports `existing`, Comfy Kitchen INT8, SLA, Sol, and CK/Sparse/CK Hybrid paths |
+| H3 W4A8 model support | Enhanced Loader preserves the `asym_w4a8_int8` layout; SM75 adds native codebook W4A8 linear acceleration, compatible with chunked CK and VEDA |
 | Architecture-specific sparse kernels | Bundled native CUDA kernels for SM75; Triton or the official NVIDIA Sol-Attn path for SM80+ |
 | Numerical diagnostics | Detects NaN/Inf and can identify the first failing QKV, attention, `out_proj`, or MLP stage |
 | Lightweight utilities | Reference-image, reference-video, prompt-loading, and workflow-export helpers |
@@ -65,13 +66,25 @@ On SM80+, every SLA and Sol mode replaces sparse results for reference- and gene
 
 Sparse attention is not guaranteed to outperform CK at every resolution, duration, or GPU. Compare sampling time under the same model, seed, frame count, step count, and offload policy.
 
+## W4A8 model support
+
+Enhanced Loader supports mixed-precision H3 checkpoints in ComfyUI's `asym_w4a8_int8` format, including `minimax_h3_ref2va_pruned_w4a8_mixed.safetensors` and `minimax_h3_fl2va_pruned_w4a8_mixed.safetensors`. Put the checkpoint in a configured `diffusion_models` / `unet` search directory and select it in `MiniMax H3 Enhanced Loader - Star7`. Keep the text encoder, VAE and conditioning nodes from the matching H3 workflow. The environment must provide ComfyUI and Comfy Kitchen `AsymW4A8Int8Layout` support.
+
+SM75 native acceleration accepts supported 16-value codebooks, ConvRot groups of 256 and grouped-scale layouts. Layers outside that native contract retain upstream quantized execution. QKV / MLP chunking can reuse prepared weights. W4A8 and VEDA operate at different stages and can be combined with VEDA + chunked CK; do not additionally stack SLA / Sol / VSA sparse attention.
+
+W4A8 GEMM, VEDA and preprocessing use independent CUDA DLLs without Python/PyTorch C++ ABI linkage. CPython 3.12, compilation tools and Python development files are not required by the bundled kernels. Windows x64, a CUDA-13-compatible NVIDIA driver and CUDA PyTorch / Comfy Kitchen supporting the checkpoint format are required. Update each DLL with its checksum manifest; unavailable libraries retain upstream execution and log the reason. This does not imply support for arbitrary INT4 / QuantFunc checkpoints or higher speed than INT8. Compare peak VRAM, runtime and quality under identical settings.
+
+Protected FP16 W4A8 on SM75 fuses SwiGLU, rescaling and casting to reduce FP32 intermediates. Standalone chunked CK can compress Q/K during projection under memory pressure, preserving the global nine-sample K anchor and checking quantization against the installed Kitchen on first use. Ample-memory runs and attention overrides, including VEDA, retain the original QKV path. VEDA keeps floating predictor features with separate workspace limits and caches. No extra nodes or controls are needed.
+
 ## Nodes
 
 | Node | Purpose |
 |---|---|
 | `MiniMax H3 Enhanced Loader - Star7` | Independent H3 model loader bundled with this project; selects protected FP16 or native BF16 by GPU architecture, preserves quantized dispatch, and uses a distinct class ID to avoid conflicts with the standalone FP16 project |
 | `MiniMax H3 VDN Acceleration - Star7` | Applies a complete VDN stage with its trained hybrid attention and adapters; supports DMD8 and the 50-step base mode |
+| `MiniMax H3 VEDA Sparse Attention - Star7` | Optional predictor-driven sparse attention for normal H3 sampling and chunked CK; standalone CUDA DLL on SM75, Triton on SM80+; disabled mode passes the model through and diagnostics stay in logs |
 | `MiniMax H3 VRAM Chunk Acceleration - Star7` | QKV/RoPE/MLP chunking, targeted OOM reduction, and attention selection |
+| `MiniMax H3 Live Preview - Star7` | Uses TAEH3 after sampling steps to display a looping animation across the full timeline |
 | `Reference Video Load - Star7` | Drag-and-drop video loading, time-range trimming, long-edge limiting, synchronized video/audio output |
 | `Reference Image Load - Star7` | Drag-and-drop loading, long-edge limiting, optional upscale, and maximum-area centered cropping for common landscape/portrait ratios |
 | `Prompt Load - Star7` | Extract prompts from dropped image, video, or workflow JSON files and retain alternative candidates |

@@ -292,7 +292,8 @@ template <typename T, int NL, int WARPK, int CHANNEL_TILES, int ROTATION,
 __forceinline__ __device__ void
 process_k(const T *__restrict__ in, int8_t *__restrict__ out,
           float *__restrict__ sc_buf, const int oblk, const int L, const int C,
-          const int anchor_index, const int64_t stride_n) {
+          const int anchor_index, const int64_t stride_n,
+          const T *external_anchor = nullptr) {
   const int lane = threadIdx.x & 31;
   const int wid = threadIdx.x >> 5;
   const int otld = wid;
@@ -302,14 +303,14 @@ process_k(const T *__restrict__ in, int8_t *__restrict__ out,
   for (int i = 0; i < CHANNEL_TILES * 4; ++i)
     bias[i] = 0.f;
 
-  if (anchor_index >= 0) {
+  if (external_anchor || anchor_index >= 0) {
 #pragma unroll
     for (int tile = 0; tile < CHANNEL_TILES; ++tile) {
       const int ch = tile * 128 + (lane << 2);
       const int64_t anchor_offset =
           (int64_t)anchor_index * stride_n + ch;
       if (ALIGNED4 || ch + 3 < C) {
-        VectorLoader4<T>::load(&in[anchor_offset], &bias[tile * 4]);
+        VectorLoader4<T>::load(external_anchor ? external_anchor + ch : &in[anchor_offset], &bias[tile * 4]);
       } else if (ch < C) {
 #pragma unroll
         for (int c = 0; c < 4; ++c)

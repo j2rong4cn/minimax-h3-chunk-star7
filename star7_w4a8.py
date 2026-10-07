@@ -1,16 +1,19 @@
 """Star7's local SM75 grouped-codebook W4A8 adapter for H3."""
 from __future__ import annotations
 
-import importlib.util
 import logging
 import os
 from collections import Counter
-from pathlib import Path
 
 import torch
 from comfy_kitchen.tensor.int8_utils import _build_hadamard, _rotate_activation
+try:
+    from . import h3_preprocess, w4a8_native
+except ImportError:
+    import h3_preprocess
+    import w4a8_native
 
-LOG = logging.getLogger("Star7-H3")
+LOG = logging.getLogger("Star7-H3-W4A8")
 _KERNEL = None
 _LOAD_ATTEMPTED = False
 _COUNTS = Counter()
@@ -26,23 +29,13 @@ def _load_kernel():
     if _LOAD_ATTEMPTED:
         return _KERNEL
     _LOAD_ATTEMPTED = True
-    root = Path(__file__).resolve().parent / "bin" / "win_amd64" / "w4a8"
-    candidates = list(root.glob("_C*.pyd"))
-    if len(candidates) != 1:
-        LOG.warning("[Star7 H3 W4A8] local native extension missing")
-        return None
     try:
-        spec = importlib.util.spec_from_file_location("star7_h3_native._C", candidates[0])
-        if spec is None or spec.loader is None:
-            LOG.warning("[Star7 H3 W4A8] Native extension is incompatible with this platform; using CK")
-            return None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    except (ImportError, OSError, RuntimeError) as exc:
-        LOG.warning("[Star7 H3 W4A8] local native extension unavailable: %s", exc)
+        module = w4a8_native.Kernel()
+    except (OSError, RuntimeError, ValueError, AttributeError) as exc:
+        LOG.warning("[Star7 H3 W4A8] Independent CUDA library unavailable; using upstream CK. Check DLL, manifest and driver: %s", exc)
         return None
     _KERNEL = module
-    LOG.debug("[Star7 H3 W4A8] Native SM75 extension available")
+    LOG.debug("[Star7 H3 W4A8] Independent SM75 CUDA library available")
     return _KERNEL
 
 
@@ -109,8 +102,12 @@ def try_forward(linear, x, weight, bias, input_act=None):
     if input_act == "swiglu":
         # Preserve FP16 Exact's FP32 SwiGLU and the FP16 boundary before
         # ConvRot. The fused FHT quantizer has different rounding here.
-        gate, up = x2d.chunk(2, dim=-1)
-        x2d = (torch.nn.functional.silu(gate.float()) * up.float() / 256.0).half()
+        fused = h3_preprocess.swiglu_scaled(x2d)
+        if fused is None:
+            gate, up = x2d.chunk(2, dim=-1)
+            x2d = (torch.nn.functional.silu(gate.float()) * up.float() / 256.0).half()
+        else:
+            x2d = fused
     elif input_act is not None:
         return _fallback("unsupported fused activation")
     hadamard = _build_hadamard(256, device=x.device, dtype=x.dtype)

@@ -345,8 +345,15 @@ def test_rope_matches_eager_partial_rotary(device=torch.device("cpu")):
 def test_mlp_chunk_matches_full_forward(device=torch.device("cpu")):
     from comfy.ldm.minimax import model as h3_model
 
+    class Linear(torch.nn.Linear):
+        def forward(self, value, input_act=None):
+            if input_act == 'swiglu':
+                gate, up = value.chunk(2, dim=-1)
+                value = torch.nn.functional.silu(gate) * up
+            return super().forward(value)
+
     torch.manual_seed(456)
-    mlp = h3_model.MLP(hidden=16, ffn=24, operations=torch.nn).to(device)
+    mlp = h3_model.MLP(hidden=16, ffn=24, operations=SimpleNamespace(Linear=Linear)).to(device)
     x = torch.randn(519, 16, dtype=torch.float32, device=device)
     expected = h3_model.MLP.forward(mlp, x)
 
@@ -1649,8 +1656,8 @@ def test_sm80_h3_rejects_upstream_fp16_compute():
         message = str(exc)
         assert "Upstream precision configuration error" in message
         assert "The GPU supports FP16" in message
-        assert "分块节点尚未修改模型" in message
-        assert "请自行检查启动器参数" in message
+        assert "Chunk has not modified the model" in message
+        assert "Check the launcher settings" in message
     else:
         raise AssertionError("SM80+ accepted unsupported FP16 H3 compute")
 

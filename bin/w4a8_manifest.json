@@ -1,0 +1,8 @@
+{
+  "windows_x64": {
+    "sha256": "a4b3bf9e73a50906fe8e64e79035ab5724919289ec5c8b3fcfa43abe764f1a33",
+    "size": 1788416,
+    "file": "win_amd64/star7_w4a8_sm75_v1.dll"
+  },
+  "abi_version": 1
+}
