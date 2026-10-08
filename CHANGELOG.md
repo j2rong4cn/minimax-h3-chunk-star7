@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.18.7 - 2026-10-09
+
+- Improve SM80+ chunked QKV/MLP weight reuse while preserving native quantization; retain whole-input NVFP4 scaling during QKV chunking.
+- Add bounded projection and norm/RoPE numerical checks to per-run diagnostics.
+
 ## 2.18.6 - 2026-10-08
 
 - Reduce SM80+ SLA and All-INT8 Sol preprocessing copies and temporary memory.

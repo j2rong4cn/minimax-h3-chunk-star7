@@ -503,7 +503,18 @@ if (process.argv[2]) {
     }
     indexed.onConfigure({});
     indexed.onNodeCreated();
-    for (let pass = 0; pass < 3; pass += 1) {
+    const expectedThirdAudio = expected.has("ref_audio_1") || expected.has("ref_audio_2");
+    for (let pass = 0; pass < 4; pass += 1) {
+        // Reproduce the frontend restoring the unconnected dynamic spare last.
+        // Its native removeInput updates endpoints; Star7 must then move it back
+        // without transferring media/widget links to a neighbouring input.
+        const spareIndex = indexed.inputs.findIndex(input =>
+            input.name.startsWith("ref_images.ref_image_") && input.link == null);
+        if (spareIndex >= 0) {
+            const spare = indexed.inputs[spareIndex];
+            indexed.removeInput(spareIndex);
+            indexed.addInput(spare.name, spare.type);
+        }
         indexed.onConnectionsChange();
         indexed.onConfigure({});
         for (const [name, link] of expected) {
@@ -512,8 +523,10 @@ if (process.argv[2]) {
         for (const input of saved.inputs.filter(input => input.widget && !expected.has(input.name))) {
             assert.equal(indexed.inputs.find(current => current.name === input.name)?.link, null, input.name);
         }
-        assert.ok(indexed.inputs.find(input => input.name === "ref_audio_2"));
+        assert.equal(Boolean(indexed.inputs.find(input => input.name === "ref_audio_2")), expectedThirdAudio);
     }
-    assert.equal(indexed.inputs.find(input => input.name === "ref_audio_2").link, shifted ? null : saved.inputs[audioIndex]?.link ?? null);
-    console.log("Supplied workflow: saved insertion shift restored; all media/widget connections stable across reloads: PASS");
+    if (expectedThirdAudio) {
+        assert.equal(indexed.inputs.find(input => input.name === "ref_audio_2").link, shifted ? null : saved.inputs[audioIndex]?.link ?? null);
+    }
+    console.log("Supplied workflow: empty reference spare restored last on four reloads; all media and connected prompt/width/height/frames retain their links: PASS");
 }

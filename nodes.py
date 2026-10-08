@@ -23,7 +23,7 @@ except ImportError:
     import sm80_diagnostics
 
 _LOG = logging.getLogger("MiniMaxH3ActivationChunkStar7")
-NODE_VERSION = "2.18.6"
+NODE_VERSION = "2.18.7"
 FP16_EXACT_PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 HYBRID_ALL_INT8_BACKEND_NAME = "hybrid_sm75_ck_sla_all_int8"
 SM86PLUS_BACKEND_NAME = "sla_sm80+_qk_int8_pv_bf16"
@@ -671,6 +671,80 @@ def _sm75_qkv_reuse_path(
     return capability == (7, 5) and effective > 0
 
 
+def _fixed_fp8_input_scale(linear) -> bool:
+    import comfy.quant_ops
+    layout = getattr(linear, "layout_type", None)
+    if layout not in ("TensorCoreFP8Layout", "TensorCoreFP8E4M3Layout", "TensorCoreFP8E5M2Layout"):
+        return False
+    expected = getattr(comfy.quant_ops, layout, None)
+    registry = getattr(comfy.quant_ops, "get_layout_class", None)
+    return expected is not None and registry is not None and registry(layout) is expected
+
+
+def _sm80_qkv_reuse_path(linear, x: torch.Tensor, chunk: int) -> bool:
+    if (x.device.type != "cuda" or x.dtype != torch.bfloat16
+            or not 0 < chunk < x.shape[0]
+            or torch.cuda.get_device_capability(x.device) < (8, 0)
+            or not _linear_can_reuse_weights(linear)
+            or getattr(linear, "_full_precision_mm", False)
+            or "forward" in linear.__dict__
+            or getattr(linear, "_forward_hooks", None)
+            or getattr(linear, "_forward_pre_hooks", None)):
+        return False
+    mode = _linear_quantization_mode(linear)
+    if mode == "input-and-weight":
+        if not _fixed_fp8_input_scale(linear) or torch.cuda.get_device_capability(x.device) < (8, 9):
+            return False
+    free, _ = torch.cuda.mem_get_info(x.device)
+    reusable = torch.cuda.memory_reserved(x.device) - torch.cuda.memory_allocated(x.device)
+    # Account for final QKV, a projection slab, cast + private weight and a margin.
+    columns = int(getattr(linear, "out_features", linear.weight.shape[0]))
+    required = ((int(x.shape[0]) + chunk) * columns * x.element_size()
+                + 2 * linear.weight.numel() * x.element_size() + 256 * 2**20)
+    return free + max(0, reusable) >= required
+
+
+def _sm80_qkv_global_input_scale(linear, x, chunk):
+    import comfy.quant_ops
+    import comfy.model_management as mm
+    if (x.device.type != "cuda" or x.dtype != torch.bfloat16
+            or not 0 < chunk < x.shape[0]
+            or torch.cuda.get_device_capability(x.device) < (8, 0)
+            or _linear_quantization_mode(linear) != "input-and-weight"
+            or getattr(linear, "input_scale", None) is not None
+            or getattr(linear, "layout_type", None) != "TensorCoreNVFP4Layout"
+            or comfy.quant_ops.get_layout_class("TensorCoreNVFP4Layout") is not comfy.quant_ops.TensorCoreNVFP4Layout
+            or not _linear_can_reuse_weights(linear)
+            or "forward" in linear.__dict__
+            or getattr(linear, "_forward_hooks", None)
+            or getattr(linear, "_forward_pre_hooks", None)):
+        return None
+    pre_scale = getattr(linear, "pre_quant_scale", None)
+    if pre_scale is not None:
+        pre_scale = mm.cast_to_device(pre_scale, x.device, x.dtype)
+    maximum = None
+    for start in range(0, x.shape[0], chunk):
+        slab = x[start:start + chunk]
+        if pre_scale is not None:
+            slab = slab * pre_scale
+        current = slab.abs().amax().float()
+        maximum = current if maximum is None else torch.maximum(maximum, current)
+    return (maximum.to(x.dtype) / (comfy.quant_ops.ck.float_utils.F8_E4M3_MAX
+                                   * comfy.quant_ops.ck.float_utils.F4_E2M1_MAX)).float()
+
+
+def _linear_with_input_scale(linear, x, scale):
+    import comfy.ops
+    import comfy.model_management as mm
+    comfy.ops.run_every_op()
+    dtype = x.dtype
+    pre_scale = getattr(linear, "pre_quant_scale", None)
+    if pre_scale is not None:
+        x = x * mm.cast_to_device(pre_scale, x.device, dtype)
+    packed = comfy.ops.QuantizedTensor.from_float(x, linear.layout_type, scale=scale)
+    return linear.forward_comfy_cast_weights(packed, dtype, want_requant=True)
+
+
 def _is_cuda_oom(exc: BaseException) -> bool:
     oom_cls = getattr(torch, "OutOfMemoryError", RuntimeError)
     if isinstance(exc, oom_cls):
@@ -1067,8 +1141,8 @@ def _make_native_w4a8_forward(upstream_forward):
     return forward
 
 
-def _resident_qkv_caller(linear, x: torch.Tensor):
-    """Prepare one private QKV weight snapshot for all token chunks."""
+def _resident_linear_snapshot(linear, x: torch.Tensor):
+    """Prepare private data and quantization parameters for one bounded call."""
     import comfy.ops
 
     if not _linear_can_reuse_weights(linear):
@@ -1090,6 +1164,13 @@ def _resident_qkv_caller(linear, x: torch.Tensor):
         else:
             private_weight = weight.detach().clone() if weight is not None else None
         private_bias = bias.detach().clone() if bias is not None else None
+    return private_weight, private_bias, quant_mode
+
+
+def _resident_qkv_caller(linear, x: torch.Tensor):
+    """Prepare one private QKV weight snapshot for all token chunks."""
+    import comfy.ops
+    private_weight, private_bias, quant_mode = _resident_linear_snapshot(linear, x)
     def call(value):
         return _resident_linear_forward(
             linear, value, private_weight, private_bias, quant_mode
@@ -1101,6 +1182,42 @@ def _resident_qkv_caller(linear, x: torch.Tensor):
         else "dense"
     )
     return call, prepared_backend
+
+
+def _sm80_resident_mlp_callers(mlp, x, chunk):
+    import comfy.ops
+    if (comfy.model_management.in_training or x.requires_grad
+            or x.device.type != "cuda" or x.dtype != torch.bfloat16 or not 0 < chunk < x.shape[0]
+            or torch.cuda.get_device_capability(x.device) < (8, 0)):
+        return None
+    for linear in (mlp.fc1, mlp.fc2):
+        if (not _linear_can_reuse_weights(linear) or "forward" in linear.__dict__
+                or getattr(linear, "_full_precision_mm", False)
+                or getattr(linear, "_forward_hooks", None) or getattr(linear, "_forward_pre_hooks", None)):
+            return None
+        if _linear_quantization_mode(linear) == "input-and-weight":
+            if not _fixed_fp8_input_scale(linear) or torch.cuda.get_device_capability(x.device) < (8, 9):
+                return None
+    free, _ = torch.cuda.mem_get_info(x.device)
+    reusable = torch.cuda.memory_reserved(x.device) - torch.cuda.memory_allocated(x.device)
+    required = (2 * (mlp.fc1.weight.numel() + mlp.fc2.weight.numel()) * x.element_size()
+                + chunk * mlp.fc1.out_features * x.element_size()
+                + x.numel() * x.element_size() + 256 * 2**20)
+    if free + max(0, reusable) < required:
+        return None
+    weight1, bias1, mode1 = _resident_linear_snapshot(mlp.fc1, x)
+    weight2, bias2, mode2 = _resident_linear_snapshot(mlp.fc2, x)
+    def fc1(value):
+        return _resident_linear_forward(mlp.fc1, value, weight1, bias1, mode1)
+    def fc2(value, input_act="swiglu"):
+        if (isinstance(weight2, comfy.ops.QuantizedTensor) and weight2._layout_cls == "TensorWiseINT8Layout"
+                and not getattr(weight2._params, "transposed", False)
+                and not getattr(mlp.fc2, "_full_precision_mm", False)):
+            comfy.ops.run_every_op()
+            return comfy.ops.linear_input_act_(value, weight2, bias2, input_act)
+        activated = comfy.ops._eager_input_act(value, input_act)
+        return _resident_linear_forward(mlp.fc2, activated, weight2, bias2, mode2)
+    return fc1, fc2, "checkpoint-native-sm80"
 
 
 def _resident_fp16_exact_mlp_callers(mlp, x: torch.Tensor):
@@ -1186,6 +1303,16 @@ def _run_chunked_h3_mlp(
     auto_halve = bool(_CONFIG["auto_halve_on_oom"])
     mode = "upstream-preserved" if upstream_forward is not None else "native"
     resident_callers = None
+    if upstream_forward is None and _CONFIG["reuse_mlp_weights"]:
+        try:
+            resident_callers = _sm80_resident_mlp_callers(self, x, current_chunk)
+            if resident_callers is not None:
+                mode = "sm80-native-resident"
+        except RuntimeError as exc:
+            if not _is_cuda_oom(exc):
+                raise
+            exc.__traceback__ = None
+            _clear_cuda_after_oom(x.device)
     # The only upstream MLP wrapper we can reproduce exactly is the Star7
     # FP16 companion: FP32 SwiGLU plus the K_FC2 rescale around fc2.
     upstream_source = _callable_source(upstream_forward) if upstream_forward is not None else ""
@@ -1285,7 +1412,7 @@ def _run_chunked_h3_mlp(
         _LOG.info(
             "[Star7 H3 Chunk] First-block MLP | S=%d | chunk=%d x %d | mode=%s%s",
             seq_len, current_chunk, calls, mode,
-            " | w4a8=" + star7_w4a8.runtime_summary() if resident_callers is not None else "",
+            " | w4a8=" + star7_w4a8.runtime_summary() if mode == "fp16-exact-resident" else "",
         )
 
     _log_h3_cuda_memory("after-mlp", x.device, block_index=block_index)
@@ -2261,12 +2388,16 @@ def _minimax_ck_int8_attention_forward(self, x, rope_freqs=None, transformer_opt
     q, k, v = _prepare_h3_qkv_chunked(
         self, x, rope_freqs, mm, comfy.quant_ops, output_dtype=x.dtype,
         compact_query=compact,
+        raw_capture=(transformer_options['star7_sm80_diagnostics'].projection_capture(
+            self.qkv_proj, x, _linear_quantization_mode(self.qkv_proj) == 'input-and-weight',
+            _fixed_fp8_input_scale(self.qkv_proj))
+            if transformer_options.get('star7_sm80_diagnostics') is not None else None),
     )
     diagnostics = transformer_options.get('star7_sm80_diagnostics')
     if diagnostics is not None:
         diagnostics.observe('CK->VEDA' if transformer_options.get('star7_veda_active') else 'CK',
                             (q, k, v), int(_CONFIG['effective_qkv_chunk_tokens']),
-                            str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)))
+                            str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)) + ':' + self._star7_qkv_weight_mode)
     _log_h3_cuda_memory(
         "after-attention-qkv", x.device,
         block_index=getattr(self, "_star7_block_index", None),
@@ -2480,11 +2611,15 @@ def _minimax_sla_forward(
     q, k, v = _prepare_h3_qkv_chunked(
         self, x, rope_freqs, mm, comfy.quant_ops,
         output_dtype=torch.bfloat16 if sla_bf16 else torch.float16,
+        raw_capture=(transformer_options['star7_sm80_diagnostics'].projection_capture(
+            self.qkv_proj, x, _linear_quantization_mode(self.qkv_proj) == 'input-and-weight',
+            _fixed_fp8_input_scale(self.qkv_proj))
+            if transformer_options.get('star7_sm80_diagnostics') is not None else None),
     )
     diagnostics = transformer_options.get('star7_sm80_diagnostics')
     if diagnostics is not None:
         diagnostics.observe('SLA', (q, k, v), int(_CONFIG['effective_qkv_chunk_tokens']),
-                            str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)))
+                            str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)) + ':' + self._star7_qkv_weight_mode)
     _log_h3_cuda_memory(
         "after-attention-qkv", x.device,
         block_index=getattr(self, "_star7_block_index", None),
@@ -2785,11 +2920,15 @@ def _minimax_sol_forward(
     if producer is None:
         q, k, v = _prepare_h3_qkv_chunked(self, x, rope_freqs, mm, comfy.quant_ops,
             output_dtype=torch.bfloat16 if official else torch.float16,
-            output_layout=sol_layout)
+            output_layout=sol_layout,
+            raw_capture=(transformer_options['star7_sm80_diagnostics'].projection_capture(
+                self.qkv_proj, x, _linear_quantization_mode(self.qkv_proj) == 'input-and-weight',
+            _fixed_fp8_input_scale(self.qkv_proj))
+                if transformer_options.get('star7_sm80_diagnostics') is not None else None))
         diagnostics = transformer_options.get('star7_sm80_diagnostics')
         if diagnostics is not None:
             diagnostics.observe('Sol-official' if official else 'Sol-INT8', (q, k, v), configured_chunk,
-                                str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)))
+                                str(getattr(self.qkv_proj, 'layout_type', type(getattr(self.qkv_proj, 'weight', None)).__name__)) + ':' + self._star7_qkv_weight_mode)
         audio_overrides = _sm80plus_audio_query_overrides(q, k, v, audio_ranges, layout=sol_layout)
     del x
     if official and producer is None:
@@ -3311,14 +3450,16 @@ def _prepare_h3_qkv_chunked(
     first_rope_ms = None
     qkv_call = self.qkv_proj
     qkv_weight_mode = "streamed"
+    reuse_sm80 = (_CONFIG["reuse_mlp_weights"]
+                  and _sm80_qkv_reuse_path(self.qkv_proj, x, configured_chunk))
     if (
-        _sm75_qkv_reuse_path(x, configured_chunk)
+        (_sm75_qkv_reuse_path(x, configured_chunk) or reuse_sm80)
         and _CONFIG["reuse_mlp_weights"]
         and _linear_can_reuse_weights(self.qkv_proj)
     ):
         try:
             qkv_call, prepared_backend = _resident_qkv_caller(self.qkv_proj, x)
-            qkv_weight_mode = f"resident-{prepared_backend}"
+            qkv_weight_mode = f"resident-sm80-{prepared_backend}" if reuse_sm80 else f"resident-{prepared_backend}"
         except Exception as exc:
             if not _is_cuda_oom(exc):
                 raise
@@ -3329,6 +3470,11 @@ def _prepare_h3_qkv_chunked(
                 "[Star7 H3 Chunk] Holding the patched QKV weight exceeded VRAM; "
                 "using per-chunk streaming"
             )
+    self._star7_qkv_weight_mode = qkv_weight_mode
+    input_scale = _sm80_qkv_global_input_scale(self.qkv_proj, x, chunk)
+    if input_scale is not None:
+        qkv_call = lambda slab: _linear_with_input_scale(self.qkv_proj, slab, input_scale)
+        self._star7_qkv_weight_mode += "+global-input-scale"
     _set_sequence_status("QKV", sequence)
     shape = (1, heads, sequence, head_dim) if output_layout == "BHLD" else (1, sequence, heads, head_dim)
     q_out = k_out = v_out = None
@@ -3361,6 +3507,7 @@ def _prepare_h3_qkv_chunked(
             sample_k = self.k_norm(sample_k.view(9, heads, head_dim)).permute(1, 0, 2).unsqueeze(0)
         q_out.prepare_key(sample_k.to(output_dtype))
         del sample_qkv, sample_q, sample_k, positions
+    norm_capture = getattr(raw_capture, 'check_norm', None)
     start = 0
     block_index = getattr(self, "_star7_block_index", None)
     while start < sequence:
@@ -3408,6 +3555,8 @@ def _prepare_h3_qkv_chunked(
                 profile_rope = bool(profile_total and start == 0)
                 rope_profile_start = time.perf_counter() if profile_rope else None
                 rope_fn(q, k, freq_chunk, qw, kw, epsilon=self.q_norm.eps, rot_dim=rot)
+                if norm_capture is not None:
+                    norm_capture(start, end, q[0], k[0], freq_chunk, qw, kw, self.q_norm.eps, rot)
                 _debug_sla_tensor(
                     f"Q norm+RoPE chunk [{start}:{end}]",
                     q, block_index, row_dim=1, check_fp16_range=True,
