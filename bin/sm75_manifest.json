@@ -13,8 +13,10 @@
   },
   "linux_x86_64": {
     "file": "linux_x86_64/star7_sla_sm75_v7.so",
-    "sha256": "b899b6dc00f883558972fae96bb5201c2c6216115ed3b948628e113c3f56fe0f",
-    "size": 1679512
+    "sha256": "08b99b64e5e84a1a39fc5db65371c7dc53b2b148a99d9c4e6474e57ad3a2bc4e",
+    "size": 1946728,
+    "sol_fp16_pv_shared_bytes": 32768,
+    "sol_all_int8_shared_bytes": 24576
   },
   "kernel": {
     "head_dim": 128,
