@@ -1348,6 +1348,8 @@ def _run_chunked_h3_mlp(
             )
             if resident_callers is not None:
                 fc1_call, fc2_call, _ = resident_callers
+                if bool(_CONFIG.get("fp16_exact_present")):
+                    chunk_input = chunk_input.to(torch.float16)
                 projected = fc1_call(chunk_input)
                 result = fc2_call(projected, input_act="swiglu")
                 if result is None:
@@ -1410,8 +1412,8 @@ def _run_chunked_h3_mlp(
     if do_profile:
         _PROFILED_MLP_SHAPES.add(profile_key)
         _LOG.info(
-            "[Star7 H3 Chunk] First-block MLP | S=%d | chunk=%d x %d | mode=%s%s",
-            seq_len, current_chunk, calls, mode,
+            "[Star7 H3 Chunk] First-block MLP | S=%d | chunk=%d x %d | reuse-input=%s | mode=%s%s",
+            seq_len, current_chunk, calls, output is x, mode,
             " | w4a8=" + star7_w4a8.runtime_summary() if mode == "fp16-exact-resident" else "",
         )
 

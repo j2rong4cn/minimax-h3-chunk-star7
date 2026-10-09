@@ -162,13 +162,10 @@ def _out_proj_forward(original_forward):
 
 def _mlp_forward(original_forward):
     def forward(self, tensor):
-        if tensor.dtype != torch.float16:
-            return original_forward(tensor)
-
-        projected = self.fc1(tensor)
-        gate, up = projected.chunk(2, dim=-1)
-        activated = F.silu(gate.to(torch.float32)).mul_(up.to(torch.float32))
-        scaled = (activated / K_FC2).to(torch.float16)
+        projected = self.fc1(tensor.to(torch.float16))
+        gate, up = projected.to(torch.float32).chunk(2, dim=-1)
+        activated = F.silu(gate).mul_(up)
+        scaled = activated.mul_(1.0 / K_FC2).to(torch.float16)
         return self.fc2(scaled).to(torch.float32).mul_(K_FC2)
 
     return forward
@@ -202,10 +199,11 @@ def _block_forward(original_forward, minimax_module):
 
         h = minimax_module._mod_scale_shift(
             self.norm2(x), shift_mlp, scale_mlp, mod_segments
-        ).to(torch.float16)
+        )
+        # 保持float32以支持MLP分片复用输入
         mlp = self.mlp(h)
         return minimax_module._mod_gate(
-            x, gate_mlp, mlp.to(torch.float32), mod_segments
+            x, gate_mlp, mlp, mod_segments
         )
 
     return forward
