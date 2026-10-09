@@ -3821,27 +3821,30 @@ def install_model_patch(
         if not integrated_vsa else False
     )
 
-    # ComfyUI 0.34 introduced an AIMDO malloc graph around the official H3
-    # block loop. Star7 changes the per-block allocation pattern by chunking
-    # QKV/MLP/output projections, so replaying that graph is unsafe. Install
-    # the compatibility hooks only after positively identifying a native H3
-    # model; they are thread-local and leave every other model untouched.
-    aimdo_compat = _install_aimdo_compat_hooks()
-    if aimdo_compat:
-        transformer_options = patched.model_options.setdefault(
-            "transformer_options", {}
-        )
-        transformer_options["star7_disable_aimdo_malloc_graph"] = True
-        transformer_options["star7_h3_runtime"] = NODE_VERSION
-        _LOG.info(
-            "[Star7 AIMDO compat] enabled: true | reason: H3 chunk runtime "
-            "conflicts with malloc graph replay | scope=Star7 H3 only"
-        )
+    if hasattr(diffusion_model, "_embed_and_pack"):
+        aimdo_compat = False
     else:
-        _LOG.info(
-            "[Star7 AIMDO compat] enabled: false | reason: comfy_aimdo "
-            "malloc graph API unavailable"
-        )
+        # ComfyUI 0.34 introduced an AIMDO malloc graph around the official H3
+        # block loop. Star7 changes the per-block allocation pattern by chunking
+        # QKV/MLP/output projections, so replaying that graph is unsafe. Install
+        # the compatibility hooks only after positively identifying a native H3
+        # model; they are thread-local and leave every other model untouched.
+        aimdo_compat = _install_aimdo_compat_hooks()
+        if aimdo_compat:
+            transformer_options = patched.model_options.setdefault(
+                "transformer_options", {}
+            )
+            transformer_options["star7_disable_aimdo_malloc_graph"] = True
+            transformer_options["star7_h3_runtime"] = NODE_VERSION
+            _LOG.info(
+                "[Star7 AIMDO compat] enabled: true | reason: H3 chunk runtime "
+                "conflicts with malloc graph replay | scope=Star7 H3 only"
+            )
+        else:
+            _LOG.info(
+                "[Star7 AIMDO compat] enabled: false | reason: comfy_aimdo "
+                "malloc graph API unavailable"
+            )
 
     _adapt_pruned_h3_lora(patched, diffusion_model, verbose=verbose)
 
