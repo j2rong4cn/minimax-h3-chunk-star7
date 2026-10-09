@@ -151,7 +151,6 @@ def _apply_vdn(model, vdn_checkpoint, strength, lora_mode, branch_weights,
             "visible output on torch 2.10) -- ablation use only, do not use for "
             "final renders", os.path.basename(path))
     state = VDNState(vdn_checkpoint, cfg, branches, num_heads, head_dim)
-    state.owns_compiler_switch = _needs_comfy_compiler_workaround()
     state.retain_buffers = retain
     state.cache_gpu = branch_weights == "cache_gpu"
     state.softmax_backend = attention_backend

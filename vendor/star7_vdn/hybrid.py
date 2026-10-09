@@ -35,6 +35,10 @@ from .window import full_coverage, window_bounds
 _log = logging.getLogger("comfy.vdn")
 _seen = set()
 
+try:  # ComfyUI with the comfy-aimdo allocation graph (0.38+)
+    from comfy.model_prefetch import pause_malloc_graph as _pause_malloc_graph
+except ImportError:  # older ComfyUI: nothing to pause
+    _pause_malloc_graph = contextlib.nullcontext
 
 def _once(key, message):
     if key not in _seen:
@@ -346,20 +350,27 @@ def _star7_chunked_qkv(attn, x, rope_freqs, transformer_options, raw_capture=Non
 
 def _base_attention(attn, x, rope_freqs, transformer_options):
     """comfy/ldm/minimax/model.py Attention.forward, verbatim (the dense teacher)."""
+    if isinstance(x, list):
+        x = x.pop()
     s = x.shape[0]
     prepared = _star7_chunked_qkv(
         attn, x, rope_freqs, transformer_options
     )
     if prepared is not None:
         q, k, v = prepared
+        del x, prepared
     else:
-        q, k, v = attn.qkv_proj(x).split(attn.heads * attn.head_dim, dim=-1)
+        qkv = attn.qkv_proj(x)
+        device = x.device
+        del x
+        q, k, v = qkv.split(attn.heads * attn.head_dim, dim=-1)
+        del qkv
         v = v.view(s, attn.heads, attn.head_dim)
         if rope_freqs is not None:
             q = q.view(1, s, attn.heads, attn.head_dim)
             k = k.view(1, s, attn.heads, attn.head_dim)
-            qw = comfy.model_management.cast_to(attn.q_norm.weight, device=x.device)
-            kw = comfy.model_management.cast_to(attn.k_norm.weight, device=x.device)
+            qw = comfy.model_management.cast_to(attn.q_norm.weight, device=device)
+            kw = comfy.model_management.cast_to(attn.k_norm.weight, device=device)
             rot = rope_freqs.shape[-3] * 2
             if comfy.model_management.in_training:
                 q, k = comfy.quant_ops.ck.rms_rope_split_half(
@@ -372,7 +383,7 @@ def _base_attention(attn, x, rope_freqs, transformer_options):
         else:
             q = attn.q_norm(q.view(s, attn.heads, attn.head_dim))
             k = attn.k_norm(k.view(s, attn.heads, attn.head_dim))
-    v = v.clone()
+
     q = AttentionTensorContainer(q.transpose(0, 1).unsqueeze(0))
     k = AttentionTensorContainer(k.transpose(0, 1).unsqueeze(0))
     v = AttentionTensorContainer(v.transpose(0, 1).unsqueeze(0))
@@ -390,11 +401,13 @@ def make_vdn_forward(attn, state, block_index):
     branch = state.branches[block_index]
     cfg = state.cfg
 
-    def vdn_forward(x, rope_freqs=None, transformer_options={}):
+    def _vdn_forward(x, rope_freqs=None, transformer_options={}):
         lay = state.layout
         if lay is None or branch is None:
             return _base_attention(attn, x, rope_freqs, transformer_options)
 
+        if isinstance(x, list):
+            x = x.pop()
         s = x.shape[0]
         device, dtype = x.device, x.dtype
         window_active = not lay.full_cover
@@ -534,6 +547,10 @@ def make_vdn_forward(attn, state, block_index):
             out[lay.video_start:lay.video_end] += F.linear(
                 readout.type_as(x), w["to_out_linear.weight"])
         return out
+
+    def vdn_forward(x, rope_freqs=None, transformer_options={}):
+        with _pause_malloc_graph():
+            return _vdn_forward(x, rope_freqs, transformer_options)
 
     vdn_forward._vdn_forward = True
     return vdn_forward
