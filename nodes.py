@@ -1277,6 +1277,9 @@ def _resident_fp16_exact_mlp_callers(mlp, x: torch.Tensor):
     return callers[0], callers[1], "+".join(backends)
 
 
+K_SILU = 16.0
+K_UP = 8.0
+
 def _run_chunked_h3_mlp(
     self,
     x: torch.Tensor,
@@ -1354,8 +1357,8 @@ def _run_chunked_h3_mlp(
                 result = fc2_call(projected, input_act="swiglu")
                 if result is None:
                     gate, up = projected.chunk(2, dim=-1)
-                    activated = torch.nn.functional.silu(gate.to(torch.float32)).mul_(up.to(torch.float32))
-                    result = fc2_call((activated / 256.0).to(torch.float16)).to(torch.float32).mul_(256.0)
+                    activated = torch.nn.functional.silu(gate).mul_(1.0 / K_SILU).mul_(up * (1.0 / K_UP))
+                    result = fc2_call(activated).to(torch.float32).mul_(K_SILU * K_UP)
                     del gate, up, activated
                 del projected
             elif upstream_forward is not None:
