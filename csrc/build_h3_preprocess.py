@@ -36,7 +36,7 @@ else:
     nvcc = shutil.which('nvcc')
     if not nvcc:
         raise RuntimeError('CUDA developer compiler nvcc is required to build')
-    subprocess.run([nvcc, '-shared', '-O3', '--use_fast_math', '-std=c++17', '-arch=sm_75',
+    subprocess.run([nvcc, '-shared', '-O3', '-std=c++17', '-arch=sm_75',
                     '--cudart', 'static', '-Xcompiler=-fPIC,-static-libstdc++,-static-libgcc',
                     '-Xlinker=--exclude-libs,ALL', '-o', str(output), str(source)], check=True)
     platform = 'linux_x86_64'

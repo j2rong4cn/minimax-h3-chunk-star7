@@ -160,12 +160,18 @@ def _out_proj_forward(original_forward):
 
     return forward
 
+try:
+    from . import h3_preprocess
+except ImportError:
+    import h3_preprocess
 
 def _mlp_forward(original_forward):
     def forward(self, tensor):
         projected = self.fc1(tensor.to(torch.float16))
-        gate, up = projected.chunk(2, dim=-1)
-        activated = F.silu(gate).mul_(1.0 / K_SILU).mul_(up * (1.0 / K_UP))
+        activated = h3_preprocess.swiglu_scaled(projected)
+        if activated is None:
+            gate, up = projected.chunk(2, dim=-1)
+            activated = F.silu(gate).mul_(1.0 / K_SILU).mul_(up * (1.0 / K_UP))
         return self.fc2(activated).to(torch.float32).mul_(K_SILU * K_UP)
 
     return forward
