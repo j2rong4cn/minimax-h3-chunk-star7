@@ -91,6 +91,9 @@ def _supported(linear, x, weight, input_act):
     return True
 
 
+K_SILU = 16.0
+K_UP = 8.0
+
 def try_forward(linear, x, weight, bias, input_act=None):
     """Return None for unsupported contracts; propagate CUDA launch failures."""
     if not _supported(linear, x, weight, input_act):
@@ -105,7 +108,7 @@ def try_forward(linear, x, weight, bias, input_act=None):
         fused = h3_preprocess.swiglu_scaled(x2d)
         if fused is None:
             gate, up = x2d.chunk(2, dim=-1)
-            x2d = (torch.nn.functional.silu(gate.float()) * up.float() / 256.0).half()
+            x2d = torch.nn.functional.silu(gate).mul_(1.0 / K_SILU).mul_(up * (1.0 / K_UP))
         else:
             x2d = fused
     elif input_act is not None:
@@ -122,5 +125,5 @@ def try_forward(linear, x, weight, bias, input_act=None):
     inline = x2d.shape[0] > 8192 and params.group_size == 16
     _COUNTS["inline_codebook_hits" if inline else "staged_codebook_hits"] += 1
     if input_act == "swiglu":
-        result = result.to(torch.float32).mul_(256.0)
+        result = result.to(torch.float32).mul_(K_SILU * K_UP)
     return result.reshape(*original_shape[:-1], weight._qdata.shape[0])

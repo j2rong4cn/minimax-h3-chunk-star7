@@ -7,7 +7,7 @@
   },
   "linux_x86_64": {
     "file": "linux_x86_64/star7_h3_preprocess_v1.so",
-    "sha256": "723718f43e4266a047437caed086825cda73c4141d69bf03082f2df203fd5275",
+    "sha256": "6d42a4c6366ade0c681441bcb82264d616e0a9ac9f8109aad3a99167b32ca954",
     "size": 4627608
   }
 }

@@ -17,8 +17,11 @@ STAR7_EXPORT int star7_h3_k_anchor(const void* samples, void* indices, int heads
     return static_cast<int>(cudaGetLastError());
 }
 
-__global__ void quant_k_external(const half* key, const half* anchor, int8_t* output,
-                                float* scales, int heads, int length) {
+__global__ void quant_k_external(const half* __restrict__ key,
+                                const half* __restrict__ anchor,
+                                int8_t* __restrict__ output,
+                                float* __restrict__ scales,
+                                int heads, int length) {
     const int head = blockIdx.y;
     process_k<half, 16, 128, 1, 128, true>(key + head * length * 128,
         output + head * length * 128, scales + head * ((length + 127) / 128) * 4,
@@ -46,14 +49,26 @@ STAR7_EXPORT int star7_h3_quant_q(
     return static_cast<int>(cudaGetLastError());
 }
 
-__global__ void swiglu_fp16(const half* input, half* output, int64_t count, int width) {
+__global__ void swiglu_fp16(const half* __restrict__ input,
+                            half* __restrict__ output,
+                            int64_t count, int width)
+{
     const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (index >= count) return;
-    const int64_t row = index / width, col = index % width;
-    const float gate = __half2float(input[row * width * 2 + col]);
-    const float up = __half2float(input[row * width * 2 + width + col]);
-    const float activation = gate / (1.0f + expf(-gate));
-    output[index] = __float2half_rn((activation * up) / 256.0f);
+
+    const int64_t row = index / width;
+    const int col = index - row * width;
+
+    const half* base = input + row * (width * 2) + col;
+    const float gate = __half2float(base[0]);
+    const half up = base[width];
+
+    const half silu = __float2half_rn(gate / (1.0f + expf(-gate)));
+    const half inv_ksilu = __float2half(1.0f / 16.0f);
+    const half inv_kup = __float2half(1.0f / 8.0f);
+    const half s = __hmul(silu, inv_ksilu);
+    const half a = __hmul(up, inv_kup);
+    output[index] = __hmul(s, a);
 }
 
 STAR7_EXPORT int star7_h3_swiglu_fp16(const void* input, void* output,
