@@ -408,6 +408,32 @@ def test_qkv_chunk_writes_backend_dtype_without_full_cast(device=torch.device("c
         chunk_nodes._CONFIG.update(original_config)
 
 
+def test_fp16_resident_preparation_keeps_half_compute_for_fp32_carrier():
+    import contextlib
+    import comfy.ops
+
+    contexts = []
+
+    @contextlib.contextmanager
+    def cast(linear, **kwargs):
+        contexts.append(kwargs)
+        yield linear.weight, None
+
+    linear = SimpleNamespace(
+        quant_format="asym_w4a8_int8", weight=torch.ones(4, 4, dtype=torch.float16)
+    )
+    mlp = SimpleNamespace(fc1=linear, fc2=linear)
+    with mock.patch.object(chunk_nodes, "_linear_can_reuse_weights", return_value=True), \
+         mock.patch.object(chunk_nodes, "_linear_quantization_mode", return_value="weight-only"), \
+         mock.patch.object(comfy.ops, "CastBiasWeightContext", side_effect=cast):
+        chunk_nodes._resident_fp16_exact_mlp_callers(mlp, torch.zeros(519, 4))
+    assert len(contexts) == 2
+    for context in contexts:
+        assert context["compute_dtype"] == torch.float16
+        assert context["bias_dtype"] == torch.float16
+        assert context["dtype"] == torch.float16
+
+
 def test_sm75_convrot_qkv_projection_is_bitwise_chunk_invariant():
     if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (7, 5):
         return

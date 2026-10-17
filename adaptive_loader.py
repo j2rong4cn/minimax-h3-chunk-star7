@@ -155,16 +155,41 @@ def _out_proj_forward(original_forward):
 
 def _mlp_forward(original_forward):
     def forward(self, tensor):
-        if tensor.dtype != torch.float16:
+        reuse_fp32 = (
+            tensor.dtype == torch.float32
+            and bool(getattr(self, "_star7_fp16_chunk_input", False))
+        )
+        if tensor.dtype != torch.float16 and not reuse_fp32:
             return original_forward(tensor)
 
-        projected = self.fc1(tensor)
+        projected = self.fc1(tensor.to(torch.float16))
         gate, up = projected.chunk(2, dim=-1)
         activated = F.silu(gate.to(torch.float32)).mul_(up.to(torch.float32))
         scaled = (activated / K_FC2).to(torch.float16)
         return self.fc2(scaled).to(torch.float32).mul_(K_FC2)
 
     return forward
+
+
+def _bounded_modulation(function, value, parameters, segments, chunk_rows=2048):
+    """Bound per-token AdaLN gathers without changing H3's elementwise math."""
+    def needs_split(start, stop, row):
+        return (
+            isinstance(row, torch.Tensor) and row.ndim == 1
+            and row.shape[0] == stop - start and stop - start > chunk_rows
+        )
+
+    if not any(needs_split(a, b, row) for a, b, row in segments):
+        return function(value, *parameters, segments)
+    for start, stop, row in segments:
+        if not needs_split(start, stop, row):
+            value = function(value, *parameters, [(start, stop, row)])
+            continue
+        for offset in range(start, stop, chunk_rows):
+            end = min(offset + chunk_rows, stop)
+            tile_row = row[offset - start:end - start]
+            value = function(value, *parameters, [(offset, end, tile_row)])
+    return value
 
 
 def _block_forward(original_forward, minimax_module):
@@ -177,8 +202,9 @@ def _block_forward(original_forward, minimax_module):
 
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaln_proj(t_emb)
 
-        h = minimax_module._mod_scale_shift(
-            self.norm1(x), shift_msa, scale_msa, mod_segments
+        h = _bounded_modulation(
+            minimax_module._mod_scale_shift, self.norm1(x),
+            (shift_msa, scale_msa), mod_segments,
         ).to(torch.float16)
         attention_fn = self.attn if attention is None else attention
         attention_output = attention_fn(
@@ -186,16 +212,24 @@ def _block_forward(original_forward, minimax_module):
             rope_freqs=rope_freqs,
             transformer_options=transformer_options,
         )
-        x = minimax_module._mod_gate(
-            x, gate_msa, attention_output.to(torch.float32), mod_segments
+        x = _bounded_modulation(
+            minimax_module._mod_gate, x,
+            (gate_msa, attention_output.to(torch.float32)), mod_segments,
         )
+        del h, attention_output
 
-        h = minimax_module._mod_scale_shift(
-            self.norm2(x), shift_mlp, scale_mlp, mod_segments
-        ).to(torch.float16)
+        h = _bounded_modulation(
+            minimax_module._mod_scale_shift, self.norm2(x),
+            (shift_mlp, scale_mlp), mod_segments,
+        )
+        # Only our FP16 wrapper can consume FP32 tiles and reuse this carrier.
+        if not (transformer_options.get("star7_fp16_mlp_input_reuse", False)
+                and bool(getattr(self.mlp, "_star7_fp16_chunk_input", False))):
+            h = h.to(torch.float16)
         mlp = self.mlp(h)
-        return minimax_module._mod_gate(
-            x, gate_mlp, mlp.to(torch.float32), mod_segments
+        return _bounded_modulation(
+            minimax_module._mod_gate, x,
+            (gate_mlp, mlp.to(torch.float32)), mod_segments,
         )
 
     return forward

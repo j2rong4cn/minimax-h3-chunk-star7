@@ -3,6 +3,7 @@
 // Apache-2.0 SageAttention SM75 implementation; see third_party licenses.
 
 #include <cstdint>
+#include <cassert>
 
 #include "third_party/comfy_kitchen_sage/qk_int_sv_i8_cuda.cuh"
 #include "sla_sm75_fp16_kernel.cuh"

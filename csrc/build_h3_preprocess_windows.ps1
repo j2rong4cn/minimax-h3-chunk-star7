@@ -16,4 +16,14 @@ $command = 'call "{0}" && "{1}" -shared -O3 --use_fast_math -std=c++17 -arch=sm_
 & cmd.exe /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw "H3 preprocessing CUDA build failed" }
 Remove-Item -LiteralPath ([IO.Path]::ChangeExtension($output, '.lib')),([IO.Path]::ChangeExtension($output, '.exp')) -ErrorAction SilentlyContinue
-@{ abi_version = 1; file = 'win_amd64/star7_h3_preprocess_v1.dll'; sha256 = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant() } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $projectRoot 'bin\h3_preprocess_manifest.json') -Encoding utf8
+$manifestPath = Join-Path $projectRoot 'bin\h3_preprocess_manifest.json'
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$manifest | Add-Member -Force -NotePropertyName 'windows_x64' -NotePropertyValue @{
+    file = 'win_amd64/star7_h3_preprocess_v1.dll'
+    sha256 = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant()
+    size = (Get-Item -LiteralPath $output).Length
+}
+$manifest | Add-Member -Force -NotePropertyName 'swiglu_divisor' -NotePropertyValue 256
+$manifest.PSObject.Properties.Remove('file')
+$manifest.PSObject.Properties.Remove('sha256')
+$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8

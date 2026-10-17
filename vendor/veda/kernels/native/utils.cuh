@@ -16,3 +16,5 @@
 
 #pragma once
 #include "cuda_checks.h"
+#include <cstdint>
+#include <cassert>

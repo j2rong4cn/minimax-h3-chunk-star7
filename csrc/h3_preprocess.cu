@@ -2,7 +2,11 @@
 #include "third_party/comfy_kitchen_sage/quant_qk_int8.cu"
 #include <cuda_fp16.h>
 
+#ifdef _WIN32
 #define STAR7_EXPORT extern "C" __declspec(dllexport)
+#else
+#define STAR7_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
 STAR7_EXPORT int star7_h3_preprocess_abi() { return 1; }
 
 STAR7_EXPORT int star7_h3_k_anchor(const void* samples, void* indices, int heads, uint64_t stream) {

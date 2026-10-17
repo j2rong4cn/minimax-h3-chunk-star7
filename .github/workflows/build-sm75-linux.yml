@@ -8,6 +8,36 @@ on:
       - ".github/workflows/build-sm75-linux.yml"
 
 jobs:
+  linux-native-extras:
+    runs-on: ubuntu-22.04
+    container: nvidia/cuda:13.0.2-devel-ubuntu22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host build tools
+        run: apt-get update && apt-get install -y --no-install-recommends python3 git ca-certificates binutils
+      - uses: actions/checkout@v4
+        with:
+          repository: NVIDIA/cutlass
+          ref: v4.2.0
+          path: _cutlass
+      - name: Build original-scale preprocessing, VEDA and W4A8
+        run: python3 csrc/build_linux_native.py --cutlass-include _cutlass/include
+      - name: Verify ELF checksums, standalone loading and host ABI
+        run: python3 csrc/verify_linux_native.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: star7-sm75-linux-native
+          path: |
+            bin/linux_x86_64/star7_h3_preprocess_v1.so
+            bin/linux_x86_64/star7_veda_sm75_v1.so
+            bin/linux_x86_64/star7_w4a8_sm75_v1.so
+            bin/linux_x86_64/build-validation.json
+            bin/h3_preprocess_manifest.json
+            bin/veda_sm75_manifest.json
+            bin/w4a8_manifest.json
+          if-no-files-found: error
   linux-x86_64:
     runs-on: ubuntu-22.04
     # Build on glibc 2.31 so the binary also loads on Ubuntu 20.04 hosts.

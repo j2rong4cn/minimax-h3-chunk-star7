@@ -169,3 +169,98 @@ def test_adaptive_loader_preserves_attention_override_under_fp16():
     )
     assert output.dtype is torch.float32
     assert seen == {"attention": torch.float16, "mlp": torch.float16}
+
+
+def test_fp32_tile_reuse_preserves_fp16_mlp_math_and_foreign_contract():
+    module = _load_module()
+    torch.manual_seed(817)
+    mlp = SimpleNamespace(
+        fc1=torch.nn.Linear(16, 48, bias=False, dtype=torch.float16),
+        fc2=torch.nn.Linear(24, 16, bias=False, dtype=torch.float16),
+        _star7_fp16_chunk_input=True,
+    )
+    value = torch.randn(519, 16)
+    marker = object()
+    forward = module._mlp_forward(lambda _: marker)
+    with torch.inference_mode():
+        expected = forward(mlp, value.half())
+        actual = forward(mlp, value)
+    assert actual.dtype == torch.float32
+    assert torch.equal(actual, expected)
+    mlp._star7_fp16_chunk_input = False
+    assert forward(mlp, value) is marker
+
+
+def test_fp32_mlp_carrier_requires_current_chunk_option_and_owned_wrapper():
+    module = _load_module()
+    seen = []
+
+    class MLP:
+        _star7_fp16_chunk_input = True
+
+        def __call__(self, value):
+            seen.append(value.dtype)
+            return value.float()
+
+    block = SimpleNamespace(
+        norm1=lambda value: value,
+        norm2=lambda value: value,
+        adaln_proj=lambda _: (torch.zeros(1),) * 6,
+        attn=lambda value, **kw: value,
+        mlp=MLP(),
+    )
+    minimax = SimpleNamespace(
+        _mod_scale_shift=lambda value, *a: value,
+        _mod_gate=lambda value, gate, update, segments: value + update,
+    )
+    forward = module._block_forward(None, minimax)
+    outputs = []
+    for options, owned in (({}, True), ({"star7_fp16_mlp_input_reuse": True}, True),
+                           ({"star7_fp16_mlp_input_reuse": True}, False)):
+        block.mlp._star7_fp16_chunk_input = owned
+        outputs.append(forward(block, torch.ones(3, 4), None, [], None, options))
+    assert seen == [torch.float16, torch.float32, torch.float16]
+    assert all(torch.equal(outputs[0], value) for value in outputs[1:])
+
+
+def test_real_loader_chunk_install_and_block_preserve_output():
+    spec = importlib.util.spec_from_file_location(
+        "star7_reuse_matrix", ROOT / "test_compatibility_matrix.py"
+    )
+    matrix = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(matrix)
+    adaptive = _load_module()
+    patcher, diffusion = matrix._make_patcher()
+    patched = adaptive._patch_h3_model(patcher)
+    final = matrix.CHUNK.install_model_patch(
+        patched, chunk_tokens=256, mlp_chunk_tokens=256,
+        auto_halve_on_oom=True, verbose=False, disable_dynamic_prefetch=True,
+        reuse_mlp_weights=True, attention_backend="existing",
+    )
+    options = final.model_options["transformer_options"]
+    assert options["star7_fp16_mlp_input_reuse"]
+    assert all(block.mlp._star7_fp16_chunk_input for block in diffusion.blocks)
+    for path, value in final.object_patches.items():
+        if not path.startswith("diffusion_model."):
+            continue
+        owner = diffusion
+        parts = path.split(".")[1:]
+        for part in parts[:-1]:
+            owner = owner[int(part)] if part.isdigit() else getattr(owner, part)
+        setattr(owner, parts[-1], value)
+    torch.manual_seed(987)
+    source = torch.randn(519, 16)
+    t_emb = torch.randn(1, 8, dtype=torch.float16)
+    with torch.inference_mode():
+        baseline_options = dict(options, star7_fp16_mlp_input_reuse=False)
+        expected = diffusion.blocks[0](source.clone(), t_emb, [(0, 519, 0)], None,
+                                        transformer_options=baseline_options)
+        actual = diffusion.blocks[0](source.clone(), t_emb, [(0, 519, 0)], None,
+                                      transformer_options=options)
+    assert torch.equal(actual, expected)
+    disabled = matrix.CHUNK.install_model_patch(
+        final, chunk_tokens=256, mlp_chunk_tokens=0,
+        auto_halve_on_oom=True, verbose=False, disable_dynamic_prefetch=True,
+        reuse_mlp_weights=True, attention_backend="existing",
+    )
+    assert not disabled.model_options["transformer_options"]["star7_fp16_mlp_input_reuse"]
