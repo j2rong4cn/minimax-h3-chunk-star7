@@ -125,16 +125,22 @@ Hybrid 在完整采样 step 之间切换注意力，而不是在一次 Attention
 
 SM75 原生优化适用于受支持的 16 值码本、ConvRot 256、分组尺度布局；不满足原生优化条件的层保留上游量化计算路径。QKV / MLP 分块可复用权重，减少重复准备。W4A8 与 VEDA 作用于不同环节，可搭配 VEDA + CK 分块；不要再叠加 SLA / Sol / VSA 等其他稀疏注意力。
 
-W4A8 原生 GEMM、VEDA 与预处理均使用独立 CUDA DLL，不链接 Python / PyTorch C++ ABI，无需固定 CPython 3.12，也不要求用户安装编译工具或 Python 开发文件。需要 Windows x64、兼容 CUDA 13 的 NVIDIA 驱动，以及具备对应模型格式支持的 CUDA PyTorch / Comfy Kitchen 环境。DLL 与校验清单须一起更新；库不可用时保留上游路径并写明原因。这里的支持不等于兼容任意 INT4 / QuantFunc 模型，也不保证比 INT8 更快；峰值显存、速度与画质应按相同参数比较。
+W4A8 原生 GEMM、VEDA 与预处理使用独立 CUDA C ABI 库（Windows DLL / Linux 测试版 `.so`），不链接 Python / PyTorch C++ ABI，无需固定 CPython 3.12，也不要求用户安装编译工具或 Python 开发文件。需要兼容对应 CUDA 版本的 NVIDIA 驱动，以及具备对应模型格式支持的 CUDA PyTorch / Comfy Kitchen 环境。原生库与校验清单须一起更新；W4A8 或预处理库不可用时保留上游路径并写明原因，显式选择的稀疏后端仍执行其兼容性检查。这里的支持不等于兼容任意 INT4 / QuantFunc 模型，也不保证比 INT8 更快；峰值显存、速度与画质应按相同参数比较。
 
 SM75 的受保护 FP16 W4A8 路线融合 SwiGLU、缩放和转换，减少 FP32 临时张量。独立 CK 分块在显存压力下可提前压缩 Q/K，保留全序列 9 点 K 锚定规则，并在首次使用时核对当前 Kitchen 的量化结果。显存充足或连接注意力 override（包括 VEDA）时保持原 QKV 路线；VEDA 预测器继续读取浮点特征，并使用独立的工作区限制和缓存。无需新增节点或参数。
+
+## 2.18.8 显存修复
+
+增强载入器将长序列逐 token 的 AdaLN 调制和残差门控限制为每次 2048 行，并在进入 MLP 前释放已用完的注意力张量。二采开启空间分格，并不意味着这些内部临时张量也已分块；本次补上这层保护，不修改分格数量、重叠、分辨率、帧数或重绘强度。
+
+FP32 MLP 输入可逐块转换为 FP16 运算输入并复用载体，SwiGLU 保持原来的 FP32 /256 与 *256 计算。Windows 上的算子和实际模型 MLP 检查通过，不承诺完整工作流固定提速、完全消除显存不足或改变画质。更新后需重启 ComfyUI。
 
 ## 环境与分发
 
 - SM75 Windows x64：节点内置预编译 CUDA 13 静态运行时 DLL，需要支持 CUDA 13 的 NVIDIA 580+ 驱动。
-- SM75 Linux x86_64：节点内置 CUDA 12.6 静态运行时 `.so`，面向 Ubuntu 20.04 / glibc 2.31 及更新系统，需要 NVIDIA 525.60.13+ 驱动。
+- SM75 Linux x86_64：原有 SLA / Sol 库仍使用 CUDA 12.6、Ubuntu 20.04 / glibc 2.31 构建。新增预处理、VEDA、W4A8 测试版库使用 CUDA 13、Ubuntu 22.04 / glibc 2.35 构建，需要兼容 CUDA 13 的驱动；无需用户自行编译。
 - SM75 原生库只接收张量地址、形状和当前 CUDA stream，不链接 PyTorch C++ ABI，也不依赖 SageAttention。Turing Triton 不可用时，路由/量化预处理可使用有界显存 PyTorch 路径，核心稀疏注意力仍由原生 CUDA 库执行。
-- VEDA 的 SM75 内核仅提供 Windows x64 独立 CUDA DLL，不绑定 Python / PyTorch C++ ABI，无需复制 Python 的 `include`、`libs` 或自行编译；未提供 VEDA SM75 Linux 预编译库。SM80+ 使用上游 Triton。
+- Linux 新增库由本仓库源码构建，已通过独立加载、依赖、校验值和 C ABI 检查；尚未完成 Linux GPU 数值和完整视频工作流回归，属于测试支持。预处理首次 CUDA 使用会检查 SwiGLU 的 /256 缩放契约，失败时停用融合路径。SM80+ VEDA 继续使用上游 Triton。
 - SM80+ SLA 与 All-INT8 路径使用 Triton，首次运行会编译并写入缓存，后续运行复用。
 - SM80+ 官方 BF16 Sol 优先使用 ComfyUI 0.34 `comfy_kitchen.sol_attn` 的已编译后端；该接口不可用时才使用节点内置 NVIDIA Triton 实现。
 - `sol_sm80+_bf16_official` 已内置 NVlabs/Sana `sol-engine` 源码，无需另外安装 Sana。SM80/SM86 使用官方 Triton；支持的 SM89/SM90/SM100/SM120 环境在 CuTe DSL 与 `cuda-python` 可用时使用对应专用内核，否则由官方接口使用 Triton。

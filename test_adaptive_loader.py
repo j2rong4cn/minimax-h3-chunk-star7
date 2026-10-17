@@ -109,7 +109,7 @@ def test_adaptive_loader_uses_the_fp16_loader_interface():
     ):
         required = module.MiniMaxH3FP16LoaderStar7.INPUT_TYPES()["required"]
     assert set(required) == {"unet_name"}
-    assert module.NODE_VERSION == "2.0.14"
+    assert module.NODE_VERSION == "2.0.15"
 
 
 def test_chunk_project_registers_an_independent_enhanced_loader_id():

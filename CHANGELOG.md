@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.18.8 - 2026-10-18
+
+- Bound FP16-loader per-token AdaLN scale/shift and residual-gate gathers to 2048 rows, preventing multi-GiB temporary allocations inside otherwise tiled HD refinement. Release completed attention temporaries before the MLP.
+- Reuse the FP32 MLP carrier with per-tile FP16 projection inputs; preserve the existing FP32 SwiGLU /256 and *256 contract, output-projection scale and third-party MLP behavior.
+- Support VDN list-owned inputs and avoid redundant independent-V copies while retaining isolation from larger dense QKV storage.
+- Add Linux x86_64 developer builds and host ABI verification for SM75 preprocessing, VEDA and W4A8. Keep Windows binaries unchanged; select preprocessing libraries per platform, preserve manifests across rebuilds and verify the SwiGLU scale on first CUDA use.
+- Windows numerical and memory regression results do not substitute for Linux GPU/workflow validation. New Linux libraries are experimental until that validation is available; no fixed full-generation speedup or universal VRAM guarantee.
+
 ## 2.18.7 - 2026-10-09
 
 - Improve SM80+ chunked QKV/MLP weight reuse while preserving native quantization; retain whole-input NVFP4 scaling during QKV chunking.

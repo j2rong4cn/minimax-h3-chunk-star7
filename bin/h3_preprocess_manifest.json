@@ -1,5 +1,15 @@
 {
-  "file": "win_amd64/star7_h3_preprocess_v1.dll",
-  "sha256": "6816bd6cd68e19751c1433a4d17c50abf09c221188b29df82abb79951a153e23",
-  "abi_version": 1
+  "abi_version": 1,
+  "windows_x64": {
+    "file": "win_amd64/star7_h3_preprocess_v1.dll",
+    "sha256": "6816bd6cd68e19751c1433a4d17c50abf09c221188b29df82abb79951a153e23"
+  },
+  "linux_x86_64": {
+    "file": "linux_x86_64/star7_h3_preprocess_v1.so",
+    "sha256": "c43892d156d6fcd79f4636e9fe6c8c702f2f4e398e6352e4692075ccb5c11ffd",
+    "size": 4790144,
+    "build_commit": "c497265892bb96e23039c6b54044347ac3ec04d3",
+    "validation": "Linux build and host ABI checks; GPU numerical validation pending"
+  },
+  "swiglu_divisor": 256
 }

@@ -5,5 +5,12 @@
     "file": "win_amd64/star7_veda_sm75_v1.dll",
     "sha256": "9f8505625369346b8ea242b52e6fcdb08d5c8a4870725141b5b1d9e48620dbea",
     "size": 793088
+  },
+  "linux_x86_64": {
+    "file": "linux_x86_64/star7_veda_sm75_v1.so",
+    "sha256": "62b800ecf568f64bf7595cdc5be468d9410d415a89c353ecff34fc69b8c33ceb",
+    "size": 2519800,
+    "build_commit": "c497265892bb96e23039c6b54044347ac3ec04d3",
+    "validation": "Linux build and host ABI checks; GPU numerical validation pending"
   }
 }

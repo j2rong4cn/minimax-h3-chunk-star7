@@ -21,7 +21,7 @@ import comfy.supported_models
 import comfy.utils
 
 
-NODE_VERSION = "2.0.14"
+NODE_VERSION = "2.0.15"
 PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 PATCH_MODE = "star7_minimax_h3_fp16_mode"
 TE_RUNTIME_KEY = "te_speed_minimax_h3_runtime"
