@@ -105,7 +105,7 @@ def try_forward(linear, x, weight, bias, input_act=None):
         fused = h3_preprocess.swiglu_scaled(x2d)
         if fused is None:
             gate, up = x2d.chunk(2, dim=-1)
-            x2d = (torch.nn.functional.silu(gate.float()) * up.float() / 256.0).half()
+            x2d = torch.nn.functional.silu(gate.float()).mul_(up.float()).mul_(1.0 / 256.0).half()
         else:
             x2d = fused
     elif input_act is not None:

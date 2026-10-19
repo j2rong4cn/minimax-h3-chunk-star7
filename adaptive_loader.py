@@ -154,11 +154,16 @@ def _condition_proj_forward(original_forward):
 
 def _out_proj_forward(original_forward):
     def forward(self, tensor):
-        scaled = (tensor / K_OUT_PROJ).to(torch.float16)
+        scaled = (tensor * (1.0/ K_OUT_PROJ)).to(torch.float16)
         return original_forward(scaled).to(torch.float32).mul_(K_OUT_PROJ)
 
     return forward
 
+
+try:
+    from . import h3_preprocess
+except ImportError:
+    import h3_preprocess
 
 def _mlp_forward(original_forward):
     def forward(self, tensor):
@@ -170,9 +175,11 @@ def _mlp_forward(original_forward):
             return original_forward(tensor)
 
         projected = self.fc1(tensor.to(torch.float16))
-        gate, up = projected.chunk(2, dim=-1)
-        activated = F.silu(gate.to(torch.float32)).mul_(up.to(torch.float32))
-        scaled = (activated / K_FC2).to(torch.float16)
+        scaled = h3_preprocess.swiglu_scaled(projected)
+        if scaled is None:
+            gate, up = projected.chunk(2, dim=-1)
+            activated = F.silu(gate.to(torch.float32)).mul_(up.to(torch.float32))
+            scaled = activated.mul_(1.0 / K_FC2).to(torch.float16)
         return self.fc2(scaled).to(torch.float32).mul_(K_FC2)
 
     return forward

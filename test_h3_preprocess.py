@@ -34,7 +34,7 @@ print('Compact Q / global K / CK attention bitwise parity: PASS')
 for rows, width in ((13, 256), (256, 14336), (2048, 14336)):
     x = torch.randn(rows, width * 2, device='cuda', dtype=torch.float16) * 5
     gate, up = x.chunk(2, dim=-1)
-    expected = (torch.nn.functional.silu(gate.float()) * up.float() / 256).half()
+    expected = torch.nn.functional.silu(gate.float()).mul_(up.float()).mul_(1.0 / 256.0).half()
     actual = pre.swiglu_scaled(x)
     assert torch.allclose(actual, expected, rtol=.001, atol=1e-5)
     print(f'Fused SwiGLU {rows}x{width}: max error {(actual-expected).abs().max().item():.6g}')

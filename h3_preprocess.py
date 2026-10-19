@@ -42,7 +42,7 @@ def _verify_swiglu_contract(lib, device):
                                         torch.cuda.current_stream(device).cuda_stream)
         if error:
             raise RuntimeError(f'H3 preprocessing self-test CUDA error {error}')
-        expected = (torch.nn.functional.silu(value[:, :1].float()) * value[:, 1:].float() / 256).half()
+        expected = torch.nn.functional.silu(value[:, :1].float()).mul_(value[:, 1:].float()).mul_(1.0 / 256.0).half()
         if not torch.allclose(output, expected, rtol=0.001, atol=1e-5):
             raise RuntimeError('H3 preprocessing SwiGLU self-test failed; using the native Torch path')
 
