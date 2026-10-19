@@ -1355,7 +1355,7 @@ def _run_chunked_h3_mlp(
                 if result is None:
                     gate, up = projected.chunk(2, dim=-1)
                     activated = torch.nn.functional.silu(gate.to(torch.float32)).mul_(up.to(torch.float32))
-                    result = fc2_call((activated / 256.0).to(torch.float16)).to(torch.float32).mul_(256.0)
+                    result = fc2_call(activated.mul_(1.0 / 256.0).to(torch.float16)).to(torch.float32).mul_(256.0)
                     del gate, up, activated
                 del projected
             elif upstream_forward is not None:
