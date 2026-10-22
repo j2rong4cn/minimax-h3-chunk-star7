@@ -349,11 +349,12 @@ def _patch_h3_model(model, loader_native=False):
     quant_formats = _quantization_summary(diffusion_model)
     is_quantized = bool(quant_formats)
 
-    patched.set_model_compute_dtype(torch.float16)
-    if is_quantized or loader_native:
-        # Keep the UUID update from set_model_compute_dtype without forcing
-        # MixedPrecisionOps to dequantize its weights.
-        patched.force_cast_weights = False
+    if patched.get_model_object("manual_cast_dtype") is not torch.float16:
+        patched.set_model_compute_dtype(torch.float16)
+        if is_quantized or loader_native:
+            # Keep the UUID update from set_model_compute_dtype without forcing
+            # MixedPrecisionOps to dequantize its weights.
+            patched.force_cast_weights = False
 
     if getattr(
         minimax_module.MiniMaxH3Model,
@@ -365,24 +366,6 @@ def _patch_h3_model(model, loader_native=False):
         transformer_options[PATCH_MODE] = mode
         logging.info("[Star7 H3 FP16] Global overflow fix already active | mode=%s", mode)
         return patched
-
-    condition_proj = diffusion_model.condition_proj
-    patched.add_object_patch(
-        "diffusion_model.condition_proj.forward",
-        _weak_method(
-            condition_proj,
-            _condition_proj_forward(_weak_callable(condition_proj.forward)),
-        ),
-    )
-
-    if hasattr(diffusion_model, "_embed_and_pack"):
-        patched.add_object_patch(
-            "diffusion_model._embed_and_pack",
-            _weak_method(
-                diffusion_model,
-                _embed_and_pack(_weak_callable(diffusion_model._embed_and_pack)),
-            ),
-        )
 
     for index, block in enumerate(diffusion_model.blocks):
         out_proj = block.attn.out_proj
@@ -599,9 +582,29 @@ def _load_h3_native_fp16(unet_path, disable_dynamic=False):
     if model is None:
         raise RuntimeError("ComfyUI could not load the selected MiniMax H3 model")
 
-    patched = _patch_h3_model(model, loader_native=True)
-    patched.cached_patcher_init = (_load_h3_native_fp16, (unet_path,))
-    return patched
+    model.cached_patcher_init = (_load_h3_native_fp16, (unet_path,))
+    model.set_model_compute_dtype(torch.float16)
+    model.force_cast_weights = False
+
+    diffusion_model = model.get_model_object("diffusion_model")
+    condition_proj = diffusion_model.condition_proj
+    model.add_object_patch(
+        "diffusion_model.condition_proj.forward",
+        _weak_method(
+            condition_proj,
+            _condition_proj_forward(_weak_callable(condition_proj.forward)),
+        ),
+    )
+
+    if hasattr(diffusion_model, "_embed_and_pack"):
+        model.add_object_patch(
+            "diffusion_model._embed_and_pack",
+            _weak_method(
+                diffusion_model,
+                _embed_and_pack(_weak_callable(diffusion_model._embed_and_pack)),
+            ),
+        )
+    return model
 
 
 class MiniMaxH3FP16LoaderStar7:
@@ -656,12 +659,11 @@ class MiniMaxH3FP16LoaderStar7:
             )
 
         logging.debug("[Star7 H3 FP16] Loading at creation-time FP16 | device=%s", reason)
-        return (_load_h3_native_fp16(unet_path),)
+        model = _load_h3_native_fp16(unet_path)
+        return (_patch_h3_model(model, loader_native=True),)
 
 
 class MiniMaxH3FP16ExactFixStar7:
-    DEPRECATED = True
-
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -701,12 +703,40 @@ class MiniMaxH3FP16ExactFixStar7:
             return (model,)
 
 
+class MiniMaxH3NativeFP16Loader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "unet_name": (folder_paths.get_filename_list("diffusion_models"),),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "load_model"
+    CATEGORY = "Star7/MiniMax H3"
+    DESCRIPTION = (
+        "Loads MiniMax H3 directly in native FP16 precision without overflow protection. "
+        "Creates dense and MixedPrecisionOps layers with FP16 compute from the start, "
+        "preserving INT8/ConvRot dispatch."
+    )
+
+    def load_model(self, unet_name):
+        unet_path = folder_paths.get_full_path_or_raise(
+            "diffusion_models", unet_name
+        )
+        _check_h3_checkpoint_format(unet_path)
+        logging.debug("[Star7 H3 FP16] Loading at creation-time FP16")
+        return (_load_h3_native_fp16(unet_path),)
+
+
 NODE_CLASS_MAPPINGS = {
-    "MiniMaxH3FP16LoaderStar7": MiniMaxH3FP16LoaderStar7,
     "MiniMaxH3FP16ExactFixStar7": MiniMaxH3FP16ExactFixStar7,
+    "MiniMaxH3NativeFP16Loader": MiniMaxH3NativeFP16Loader,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MiniMaxH3FP16LoaderStar7": "MiniMax H3 Native FP16 Loader - Star7",
     "MiniMaxH3FP16ExactFixStar7": "MiniMax H3 FP16 Exact Fix (Legacy) - Star7",
+    "MiniMaxH3NativeFP16Loader": "MiniMax H3 Native FP16 Loader",
 }
