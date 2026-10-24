@@ -1,0 +1,11 @@
+{
+  "abi": 1,
+  "architecture": "sm75",
+  "cuda": "13.0",
+  "platforms": {
+    "windows_x64": {
+      "file": "win_amd64/star7_spark_sm75_v3.dll",
+      "sha256": "d15ef1fc49a9d32ffcbddb45f8aa8b420f644bc204f78cc0bf8136cc6a021695"
+    }
+  }
+}

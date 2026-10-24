@@ -1,5 +1,6 @@
 import { api } from "/scripts/api.js";
 import { app } from "/scripts/app.js";
+import { openPromptAssets } from "./prompt-assets.mjs?v=20261021-assets3";
 
 const NODE_NAME = "MiniMaxH3PromptImportStar7";
 const ACCEPT = ".png,.webp,.jpg,.jpeg,.gif,.avif,.mp4,.mov,.mkv,.webm,.avi,.m4v,.json,image/*,video/*,application/json";
@@ -12,6 +13,7 @@ const PROMPT_TEXT = {
         output: "prompt",
         tooltip: "Edit directly, or drop a workflow image, video, or JSON file onto the node to import its prompt.",
         importFile: "Import file",
+        assets: "Asset prompts",
         candidates: (count) => `Candidates (${count})`,
         copy: "Copy",
         paste: "Paste",
@@ -38,6 +40,7 @@ const PROMPT_TEXT = {
         output: "提示词",
         tooltip: "可直接编辑，或把带工作流的图片、视频、JSON 拖入节点自动导入提示词。",
         importFile: "导入文件",
+        assets: "资产提示词",
         candidates: (count) => `候选词（${count}）`,
         copy: "复制",
         paste: "粘贴",
@@ -300,22 +303,28 @@ function install(node) {
         },
         draw(ctx, currentNode, width, y, height) {
             const text = strings();
-            drawActionRow(ctx, width, y, height, [text.importFile, candidateText, text.copy, text.paste]);
+            drawActionRow(ctx, width, y, height, [text.assets, text.importFile, candidateText, text.copy, text.paste]);
         },
         mouse(event, pos, currentNode) {
             if (event.type === "pointerdown" || event.type === "mousedown") {
-                this._pressedIndex = Math.min(3, Math.max(0, Math.floor(pos[0] / (currentNode.size[0] / 4))));
+                this._pressedIndex = Math.min(4, Math.max(0, Math.floor(pos[0] / (currentNode.size[0] / 5))));
                 return true;
             }
             if (event.type !== "pointerup" && event.type !== "mouseup") return false;
             const index = this._pressedIndex
-                ?? Math.min(3, Math.max(0, Math.floor(pos[0] / (currentNode.size[0] / 4))));
+                ?? Math.min(4, Math.max(0, Math.floor(pos[0] / (currentNode.size[0] / 5))));
             this._pressedIndex = null;
             if (index === 0) {
-                chooseFile((file) => void importFile(currentNode, promptWidget, actionWidget, file));
+                void openPromptAssets({
+                    fetchApi: (...args) => api.fetchApi(...args),
+                    getCurrent: () => promptWidget.value,
+                    apply: value => setPrompt(currentNode, promptWidget, value),
+                });
             } else if (index === 1) {
-                showCandidates(currentNode, promptWidget);
+                chooseFile((file) => void importFile(currentNode, promptWidget, actionWidget, file));
             } else if (index === 2) {
+                showCandidates(currentNode, promptWidget);
+            } else if (index === 3) {
                 void copyPrompt(promptWidget);
             } else {
                 void pastePrompt(currentNode, promptWidget);
@@ -345,7 +354,7 @@ function install(node) {
         event.preventDefault?.();
         event.stopPropagation?.();
         event.stopImmediatePropagation?.();
-        void importFile(this, promptWidget, candidateButton, file);
+        void importFile(this, promptWidget, actionWidget, file);
         return true;
     };
 
@@ -355,7 +364,7 @@ function install(node) {
         // user size and only enforce enough room for the widgets on new or
         // undersized nodes.
         const width = Math.max(
-            Number(node.size?.[0] || 0), Number(computed?.[0] || 0), 340,
+            Number(node.size?.[0] || 0), Number(computed?.[0] || 0), 420,
         );
         const height = Math.max(
             Number(node.size?.[1] || 0), Number(computed?.[1] || 0), 180,
@@ -380,6 +389,7 @@ function installPromptNodeDropCapture() {
     window._star7ChunkPromptDropInstalled = true;
 
     document.addEventListener("dragover", (event) => {
+        if (event.target?.closest?.('[data-star7-prompt-assets]')) return;
         const file = Array.from(event.dataTransfer?.files || []).find(supported);
         const node = file ? promptNodeAtDrop(event) : null;
         if (!node) return;
@@ -388,6 +398,7 @@ function installPromptNodeDropCapture() {
     }, true);
 
     document.addEventListener("drop", (event) => {
+        if (event.target?.closest?.('[data-star7-prompt-assets]')) return;
         const file = Array.from(event.dataTransfer?.files || []).find(supported);
         const node = file ? promptNodeAtDrop(event) : null;
         if (!node?._star7PromptImport) return;

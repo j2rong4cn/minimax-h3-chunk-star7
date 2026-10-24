@@ -10,6 +10,9 @@ from PIL import Image
 
 import folder_paths
 from server import PromptServer
+from .prompt_assets import register_routes as _register_prompt_assets
+
+_register_prompt_assets()
 
 
 _PROMPT_WORDS = ("prompt", "text", "caption", "description", "instruction", "提示词", "提示語", "提示语")

@@ -117,7 +117,12 @@ def _remember_preview_payload(payload):
     if not node_id:
         return
     with _LATEST_PREVIEW_LOCK:
-        _LATEST_PREVIEW_PAYLOADS[node_id] = dict(payload)
+        latest = dict(payload)
+        previous = _LATEST_PREVIEW_PAYLOADS.get(node_id)
+        # A status message must not erase the recoverable frame of this run.
+        if previous and previous.get('run_id') == payload.get('run_id') and payload.get('status') not in ('start', 'downloading'):
+            latest = {**previous, **latest}
+        _LATEST_PREVIEW_PAYLOADS[node_id] = latest
         # Keep only a small recovery cache for workflows with many preview
         # nodes. Each entry already replaces the previous step for that node.
         while len(_LATEST_PREVIEW_PAYLOADS) > 16:

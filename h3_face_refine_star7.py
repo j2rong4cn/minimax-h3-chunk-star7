@@ -35,6 +35,20 @@ from .refine_model_options import (
 
 
 _LOG = logging.getLogger("Star7H3FaceRefine")
+
+
+def _fit_endpoint_image(image, width, height):
+    """Cover the canvas without changing image proportions; retain its center."""
+    if image is None:
+        return None
+    if tuple(image.shape[1:3]) == (height, width):
+        return image
+    import comfy.utils
+    return comfy.utils.common_upscale(
+        image.movedim(-1, 1), width, height, "lanczos", "center"
+    ).movedim(1, -1)
+
+
 _CONTEXT_TYPE = "STAR7_H3_REFINE_CONTEXT"
 _CONTEXT_IO = io.Custom(_CONTEXT_TYPE)
 _FACE_DETECTOR_NAME = "face_yolov8m.pt"
@@ -837,7 +851,10 @@ class MiniMaxH3MaterialPromptStar7(io.ComfyNode):
         else:
             positive, latent = _unpack(MiniMaxH3ImageToVideo.execute(
                 clip, video_vae, conditioned_prompt, width, height, int(length),
-                first_frame=first_frame, last_frame=last_frame,
+                # Native I2V stretches its first-frame input. Fit both endpoints
+                # first, while retaining the originals below for HD re-encoding.
+                first_frame=_fit_endpoint_image(first_frame, width, height),
+                last_frame=_fit_endpoint_image(last_frame, width, height),
             ))[:2]
 
         if drive_audio is not None and mode in ("lock_source", "remix_source"):

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.19.0 - 2026-10-24
+
+- Add an optional Spark / VPack acceleration node with an explicit enable switch. Disabled mode returns the original model, conditioning and context; preserve upstream chunking and isolate Spark attention changes to its cloned branch. Spark suspends VEDA on that branch rather than stacking two sparse attention methods.
+- Ship the separately compiled Windows SM75 Spark v3 backend, Tensor Core cosine scoring and mixed INT8 PV / FP16 weighted-summary consumption. Keep existing CK / SLA / Sol kernels unchanged. See `docs/unified-acceleration.md` for hardware requirements and measured limits; full-video tests do not establish universal speed or lossless quality. Linux Spark is a source-build path and has not been GPU-validated.
+- Add a persistent per-user asset-prompt library to the prompt loader: edit, save, duplicate, delete, use and batch-import TXT files; use short timestamp titles with numbered collisions. Include four Chinese-titled ORB360 presets. Keep library drag/drop separate from workflow prompt import, and keep the library open when a file selection is cancelled.
+- Center-crop first/last-frame images to the target canvas while preserving aspect ratio before native I2V conditioning.
+- Preserve the recoverable preview frame when later status messages belong to the same run.
+
 ## 2.18.8 - 2026-10-18
 
 - Bound FP16-loader per-token AdaLN scale/shift and residual-gate gathers to 2048 rows, preventing multi-GiB temporary allocations inside otherwise tiled HD refinement. Release completed attention temporaries before the MLP.
