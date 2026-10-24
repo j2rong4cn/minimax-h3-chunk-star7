@@ -10,12 +10,6 @@ Attention choices include preserving an upstream backend, Comfy Kitchen INT8, ar
 
 ## 中文说明
 
-## 2.19.0 更新
-
-新增带独立开关的 [Spark／VPack 加速节点](docs/unified-acceleration.md)，沿用原分块节点设置；关闭时直接传递输入。Windows SM75 随附独立 Spark 内核，其他架构需要匹配的 Spark 后端，Linux Spark 尚未完成 GPU 验证。实测该配置下 Spark 快于纯 CK，但未超过 CK＋VEDA；近似计算可能改变画面，不保证所有配置提速。
-
-提示词载入新增“资产提示词”，支持保存、编辑、副本、删除、使用及批量拖入 TXT。保存当前提示词默认采用短时间戳名称，重名自动编号。另修复首尾帧比例：保持比例居中裁切，不再拉伸。
-
 让高画质、长时长 MiniMax H3 视频在有限显存的显卡上高效运行。
 
 ### 快速看懂
@@ -186,13 +180,14 @@ git clone https://github.com/star7code/minimax-h3-chunk-star7.git
 | `MiniMax H3 增强载入 - Star7` | 本项目内置的 H3 模型载入节点；RTX 20 系使用受保护 FP16，SM80+ 使用原生 BF16，保留模型的量化分发 |
 | `MiniMax H3 VDN 加速 - Star7` | 加载完整 VDN stage，自动安装混合注意力与配套 Adapter；支持 8 步 DMD 和 50 步原始模式 |
 | `MiniMax H3 VEDA 稀疏注意力 - Star7` | 可选的预测器驱动稀疏注意力；支持普通 H3 采样和 CK 分块，SM75 使用独立 CUDA DLL，SM80+ 使用 Triton；关闭时直接透传模型，诊断只写日志 |
+| `MiniMax H3 Spark / VPack 加速 - Star7` | 带独立开关的 Spark 注意力与 VPack 参考视频压缩，沿用上游分块设置；关闭时直接传递模型与条件。接线、硬件要求及实测限制见[使用说明](docs/unified-acceleration.md) |
 | `MiniMax H3 显存分块加速 - Star7` | QKV/RoPE/MLP 分块、注意力输出显存保护、自动降档和注意力加速选择 |
 | `MiniMax H3 实时预览 - Star7` | 每个采样步骤后用 TAEH3 显示覆盖完整时间轴的循环动画 |
 | `参考视频载入 - Star7` | 支持直接拖入视频，完成载入、时间范围裁切和最长边限制，输出同一时间窗的画面与音频 |
 | `参考图像载入 - Star7` | 支持直接拖入图片，在一个节点中完成载入、最长边限制、可选小图放大及常用横竖比例的最大保留裁切 |
-| `提示词载入 - Star7` | 支持拖入图片、视频或工作流 JSON，自动提取长文本并保留候选词 |
+| `提示词载入 - Star7` | 支持拖入图片、视频或工作流 JSON，自动提取长文本并保留候选词；“资产提示词”支持保存、编辑、副本、删除、使用及批量导入 TXT，默认以短时间戳命名，重名自动编号 |
 | `DLSS 神经画质增强 V2 - Star7` | 对图片或视频帧批次执行可调 Neural Rendering，可选目标百万像素与写实/人像/动漫预设 |
-| `MiniMax H3 多合一条件载入 - Star7` | 在一个节点中组织提示词、首尾帧、参考图、参考视频和音频，并输出可供高清放大与人脸修复复用的采样上下文 |
+| `MiniMax H3 多合一条件载入 - Star7` | 在一个节点中组织提示词、首尾帧、参考图、参考视频和音频；首尾帧保持比例居中裁切，不拉伸；输出可供高清放大与人脸修复复用的采样上下文 |
 | `MiniMax H3 一键高清放大 - Star7` | 将采样结果直接放大至目标百万像素并可选短程高清修复；输出仍为标准 H3 采样结果，VAE 在节点外独立解码 |
 | `MiniMax H3 分块解码 - Star7` | 独立解码完整 H3 音视频 latent；视频使用当前 H3 VAE 自带的时序流式与空间分块路径 |
 | `MiniMax H3 一键人脸修复 - Star7` | 接收采样后的 H3 音视频 latent，检测、跟踪并局部修脸；保留独立修复裁切，由 Star7 分块解码在最终 RGB 图像上贴回 |
