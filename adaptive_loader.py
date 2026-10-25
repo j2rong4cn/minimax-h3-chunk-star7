@@ -153,9 +153,10 @@ def _condition_proj_forward(original_forward):
 
 
 def _out_proj_forward(original_forward):
+    original_forward = weakref.proxy(getattr(original_forward, "__func__", original_forward))
     def forward(self, tensor):
         scaled = (tensor * (1.0/ K_OUT_PROJ)).to(torch.float16)
-        return original_forward(scaled).to(torch.float32).mul_(K_OUT_PROJ)
+        return original_forward(self, scaled).to(torch.float32).mul_(K_OUT_PROJ)
 
     return forward
 
@@ -166,13 +167,14 @@ except ImportError:
     import h3_preprocess
 
 def _mlp_forward(original_forward):
+    original_forward = weakref.proxy(getattr(original_forward, "__func__", original_forward))
     def forward(self, tensor):
         reuse_fp32 = (
             tensor.dtype == torch.float32
             and bool(getattr(self, "_star7_fp16_chunk_input", False))
         )
         if tensor.dtype != torch.float16 and not reuse_fp32:
-            return original_forward(tensor)
+            return original_forward(self, tensor)
 
         projected = self.fc1(tensor.to(torch.float16))
         scaled = h3_preprocess.swiglu_scaled(projected)
@@ -371,11 +373,11 @@ def _patch_h3_model(model, loader_native=False):
         out_proj = block.attn.out_proj
         patched.add_object_patch(
             f"diffusion_model.blocks.{index}.attn.out_proj.forward",
-            _weak_method(out_proj, _out_proj_forward(_weak_callable(out_proj.forward))),
+            _weak_method(out_proj, _out_proj_forward(out_proj.forward)),
         )
         patched.add_object_patch(
             f"diffusion_model.blocks.{index}.mlp.forward",
-            _weak_method(block.mlp, _mlp_forward(_weak_callable(block.mlp.forward))),
+            _weak_method(block.mlp, _mlp_forward(block.mlp.forward)),
         )
         patched.add_object_patch(
             f"diffusion_model.blocks.{index}.forward",
