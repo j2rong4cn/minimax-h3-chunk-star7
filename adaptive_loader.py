@@ -222,8 +222,11 @@ def _block_forward(original_forward, minimax_module):
             minimax_module._mod_scale_shift, self.norm1(x),
             (shift_msa, scale_msa), mod_segments,
         ).to(torch.float16)
-        attention_fn = self.attn if attention is None else attention
-        attention_output = attention_fn(
+        if attention is None:
+            attention = self.attn
+            if transformer_options.get("star7_h3_chunk", None) is not None:
+                h = [h]
+        attention_output = attention(
             h,
             rope_freqs=rope_freqs,
             transformer_options=transformer_options,
