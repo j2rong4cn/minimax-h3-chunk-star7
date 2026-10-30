@@ -26,7 +26,7 @@ PATCH_FLAG = "star7_minimax_h3_fp16_exact_fix"
 PATCH_MODE = "star7_minimax_h3_fp16_mode"
 TE_RUNTIME_KEY = "te_speed_minimax_h3_runtime"
 TE_BOUNDARY_WRAPPER_KEY = "star7_minimax_h3_fp16_commercial_te_boundary"
-K_OUT_PROJ = 64.0
+K_ATTN = 64.0
 K_FC2 = 256.0
 
 _te_logged_runtime = ContextVar("star7_h3_fp16_te_logged_runtime", default=None)
@@ -152,15 +152,6 @@ def _condition_proj_forward(original_forward):
     return forward
 
 
-def _out_proj_forward(original_forward):
-    original_forward = weakref.proxy(getattr(original_forward, "__func__", original_forward))
-    def forward(self, tensor):
-        scaled = (tensor * (1.0/ K_OUT_PROJ)).to(torch.float16)
-        return original_forward(self, scaled).to(torch.float32).mul_(K_OUT_PROJ)
-
-    return forward
-
-
 try:
     from . import h3_preprocess
 except ImportError:
@@ -221,7 +212,7 @@ def _block_forward(original_forward, minimax_module):
         h = _bounded_modulation(
             minimax_module._mod_scale_shift, self.norm1(x),
             (shift_msa, scale_msa), mod_segments,
-        ).to(torch.float16)
+        ).mul_(1.0 / K_ATTN).to(torch.float16)
         if attention is None:
             attention = self.attn
             if transformer_options.get("star7_h3_chunk", None) is not None:
@@ -230,10 +221,10 @@ def _block_forward(original_forward, minimax_module):
             h,
             rope_freqs=rope_freqs,
             transformer_options=transformer_options,
-        )
+        ).to(torch.float32).mul_(K_ATTN)
         x = _bounded_modulation(
             minimax_module._mod_gate, x,
-            (gate_msa, attention_output.to(torch.float32)), mod_segments,
+            (gate_msa, attention_output), mod_segments,
         )
         del h, attention_output
 
@@ -373,11 +364,6 @@ def _patch_h3_model(model, loader_native=False):
         return patched
 
     for index, block in enumerate(diffusion_model.blocks):
-        out_proj = block.attn.out_proj
-        patched.add_object_patch(
-            f"diffusion_model.blocks.{index}.attn.out_proj.forward",
-            _weak_method(out_proj, _out_proj_forward(out_proj.forward)),
-        )
         patched.add_object_patch(
             f"diffusion_model.blocks.{index}.mlp.forward",
             _weak_method(block.mlp, _mlp_forward(block.mlp.forward)),
